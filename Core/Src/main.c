@@ -23,6 +23,9 @@
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
 #include "string.h"
+#include "global-settingsV1.h" //global #defines
+#include "GcI2cV1.h"
+#include "GcFunctionsV1.h"
 
 /* USER CODE END Includes */
 
@@ -36,7 +39,7 @@
 
 #define FLAG_SET  1
 #define FLAG_CLEAR  0
-#define TIMER1PERIOD  100
+#define TIMER1PERIOD  1000
 #define TIMER1DACUPDATECOUNT 1
 #define UARTUPDATEPERIOD 2000
 #define RXBUFFERLENGTH 20
@@ -56,6 +59,8 @@ CAN_HandleTypeDef hcan1;
 
 DAC_HandleTypeDef hdac1;
 
+I2C_HandleTypeDef hi2c2;
+
 TIM_HandleTypeDef htim1;
 
 UART_HandleTypeDef huart1;
@@ -67,8 +72,11 @@ volatile static uint8_t timer1heartbeat = FLAG_CLEAR; //set in timer 1 ISR, read
 volatile static uint8_t timer1heartbeat2 = FLAG_CLEAR; //set in timer 1 ISR, read and reset in main loop
 volatile static uint8_t CanDataReceived = FLAG_CLEAR; //set by CAN receive callback, read & reset by mainloop
 volatile static uint8_t CanState = 0;
-volatile static uint8_t UartOutputFlag = FLAG_CLEAR;
-volatile static uint8_t UartMsgSent = FLAG_CLEAR;
+volatile static uint8_t UartOutputFlag = FLAG_CLEAR; //flag normally set by TIM ISR and cleared within the main loop
+volatile static uint8_t UartMsgSent = FLAG_CLEAR; //flag normally set when UART data is transmitted and cleared when transmission is completed
+
+static uint8_t CanRxData[8] = {};
+
 
 volatile char RxBuffer1[2] = "";
 volatile char RxBuffer2[20] = "";
@@ -86,6 +94,8 @@ volatile static uint8_t RxBufferCount = 0;
 
 volatile static uint16_t EscapeClearCount = 0;
 
+volatile static uint16_t FunctionDelay = 0; //value decremented by TIM ISR
+
 //CAN Rx
 CAN_RxHeaderTypeDef CanRxHeader = {};
 CAN_RxHeaderTypeDef * pCanRxHeader = &CanRxHeader;
@@ -102,6 +112,7 @@ static void MX_DAC1_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART3_UART_Init(void);
+static void MX_I2C2_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -128,8 +139,27 @@ int main(void)
 	uint8_t RxStringLen = 0;
 	uint8_t RxReadPtr = 0;
 
-	char tempstring[40] = "";
+	char tmpstr[100] = "";
+	char tempstring[200] = "";
 
+
+	uint16_t CanIdentifier = 0;
+	uint8_t CanDlc = 0;
+	uint8_t CanData[8] = {0};
+
+	uint8_t CanTxMsgCount = 0; //generic CAN TX message counter
+	uint8_t CanTxMailboxfullmsg = FLAG_CLEAR;  //flag set when CAN tx mailbox is full, this prevents repeated output
+	uint8_t candatacount = 0;
+
+	uint8_t ProcessRececivedCanData = FLAG_CLEAR;
+
+	uint8_t I2cInitialisationFunction = 0;
+	uint8_t I2cReadBlockFunction = 0;
+
+	uint8_t recognisedstring = FLAG_CLEAR;
+
+	uint32_t UserVal = 0;
+	uint8_t screenblock = FLAG_CLEAR;
 
   /* USER CODE END 1 */
 
@@ -157,6 +187,7 @@ int main(void)
   MX_TIM1_Init();
   MX_USART1_UART_Init();
   MX_USART3_UART_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
 
   HAL_DAC_Start(&hdac1, DAC_CHANNEL_1);
@@ -169,8 +200,10 @@ int main(void)
   pCanTxHeader->DLC = 8;
   pCanTxHeader->IDE = CAN_ID_STD;
   pCanTxHeader->RTR = CAN_RTR_DATA;
-  pCanTxHeader->StdId = 0x234; //standard identifier
-  pCanTxHeader->ExtId = 0x01; //force TXREQ bit!!!
+  //pCanTxHeader->StdId = 0x234; //standard identifier
+  pCanTxHeader->StdId = 0x345; //standard identifier used for loop back mode
+  //pCanTxHeader->ExtId = 0x01; //force TXREQ bit!!!
+  pCanTxHeader->ExtId = 0x00; //CAN Tx function should add the Tx request bit...
   pCanTxHeader->TransmitGlobalTime = 0;
 
 
@@ -181,11 +214,13 @@ int main(void)
   CAN_FilterTypeDef* pFilterConfig = &FilterConfig;
   pFilterConfig->FilterIdLow = 0x123u<<5;
   //pFilterConfig->FilterIdHigh = 0x345u;
-  pFilterConfig->FilterIdHigh = 0x123u<<5;
+  //pFilterConfig->FilterIdHigh = 0x123u<<5;
+  pFilterConfig->FilterIdHigh = 0x000u<<5; //received everything
   pFilterConfig->FilterActivation = CAN_FILTER_ENABLE;
   pFilterConfig->FilterBank = 0;
   pFilterConfig->FilterFIFOAssignment = CAN_FILTER_FIFO0;
-  pFilterConfig->FilterMaskIdHigh = 0x345u<<5;
+  //pFilterConfig->FilterMaskIdHigh = 0x345u<<5;
+  pFilterConfig->FilterMaskIdHigh = 0x000u<<5;
   pFilterConfig->FilterMaskIdLow = 0x345u<<5;
   pFilterConfig->FilterMode = CAN_FILTERMODE_IDLIST;
   pFilterConfig->FilterScale = CAN_FILTERSCALE_16BIT;
@@ -222,11 +257,11 @@ int main(void)
 
   //HAL_StatusTypeDef HAL_CAN_ActivateNotification (CAN_HandleTypeDef * hcan, uint32_t ActiveITs)
   uint8_t CanError = 0;
-  if (HAL_CAN_ActivateNotification (&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_ERROR) != HAL_OK)
+  if (HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_ERROR) != HAL_OK)
   {
 	  CanError = 0xff;
   }
-  //what is the difference betwewen the HAL_CAN_ENABLE_IT() macro and the HAL_CANM_ActivateNoftiification() function????
+  //what is the difference between the HAL_CAN_ENABLE_IT() macro and the HAL_CANM_ActivateNotification() function????
 
 
 
@@ -250,6 +285,35 @@ int main(void)
 
   //__HAL_CAN_ENABLE_IT(&hcan1, CAN_IT_RX_FIFO0_FULL | CAN_IT_ERROR);
 
+  //clear entire screen
+  strcpy(tempstring, "\e[2J");
+  uint16_t stringlength = strlen(tempstring);
+  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+  UartMsgSent = FLAG_SET;
+
+
+  /*
+  struct I2cConfig{
+  	uint16_t I2cInternalAddress;
+  	uint16_t I2cQuantity;
+  	uint8_t I2cInternalAddressWidth;
+  	uint8_t I2cDeviceAddress;
+  }structI2cConfig;  //The 'tructI2cConfig' creates an instance of the structure
+*/
+
+
+
+  struct I2cConfig tempstruct; //create instance of structure defined in GcI2cV1.h
+  //struct structI2cConfig tempstruct;
+  //structI2cConfig tempstruct;
+
+  tempstruct = GetI2cConfig();
+
+  //structptr->I2cDeviceAddress = 0x98; //this line doesn't work!
+  uint8_t x = 0;
+  //x = GetI2cConfig().I2cDeviceAddress;
+  x = tempstruct.I2cDeviceAddress;
 
 
   /* USER CODE END 2 */
@@ -258,6 +322,127 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  if (I2cReadBlockFunction != 0)
+	  {
+		  //result of "I2CR" serial command; outputs block of I2c data to the display
+		  //use setup commands beforehand:
+		  //I2CDxx
+		  //I2cAxxxx
+		  //KI2cQxxx
+		  //I2CAx
+		  switch(I2cReadBlockFunction)
+		  {
+		  	  case(1):
+				//initialisation
+				//display pointers
+				if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+				{
+				  //clear message from display
+
+					tempstruct = GetI2cConfig();
+					sprintf(tmpstr, "\e[4;1H\e[KDevice address:0x%02X", tempstruct.I2cDeviceAddress); //move cursor to 3rd line, clear text,
+					strcpy(tempstring, tmpstr);
+					sprintf(tmpstr, "\e[5;1H\e[KSource address:0x%04X", tempstruct.I2cInternalAddress);
+					strcat(tempstring, tmpstr);
+					sprintf(tmpstr, "\e[6;1H\e[KQuantity:0x%04X", tempstruct.I2cQuantity);
+					strcat(tempstring, tmpstr);
+
+					uint16_t stringlength = strlen(tempstring);
+
+					//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+					HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+					UartMsgSent = FLAG_SET;
+					FunctionDelay = 1000; //value decremented by TIM ISR
+					I2cReadBlockFunction = 2;
+				}
+				break;
+
+			case(2):
+				//wait for message to be displayed
+				if (FunctionDelay == 0)
+				{
+				  I2cReadBlockFunction = 3;
+				}
+				break;
+
+			case(3):
+				if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+				{
+					uint8_t* byteptr;
+					byteptr = ReadSmallI2CDatablock4();
+					if (*byteptr == 0)
+					{
+						sprintf(tmpstr, "\e[7;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						sprintf(tmpstr, "I2C data block read - now to display...");
+						strcat(tempstring, tmpstr);
+					}
+					else
+					{
+						sprintf(tmpstr, "\e[7;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						sprintf(tmpstr, "I2C data block read reports error: 0x%02X", *byteptr);
+						strcat(tempstring, tmpstr);
+					}
+					uint16_t stringlength = strlen(tempstring);
+
+					//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+					HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+					UartMsgSent = FLAG_SET;
+					FunctionDelay = 1000; //value decremented by TIM ISR
+					I2cReadBlockFunction = 4;
+				}
+				break;
+
+			case(4):
+				I2cReadBlockFunction = 0; //Disable this main loop function
+				break;
+
+			default:
+				I2cReadBlockFunction = 0; //Disable this main loop function
+
+		  }
+
+
+	  }
+
+	  if (I2cInitialisationFunction == 1)
+	  {
+		  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+		  {
+
+			  sprintf(tempstring, "\e[4;1HI2C initialising...");
+			  uint16_t stringlength = strlen(tempstring);
+			  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+			  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+			  UartMsgSent = FLAG_SET;
+			  I2cInitialisationFunction = 2;
+			  FunctionDelay = 1000; //value decremented by TIM ISR
+		  }
+	  }
+
+	  if (I2cInitialisationFunction == 2)
+	  {
+		  //wait for message to be displayed
+		  if (FunctionDelay == 0)
+		  {
+			  I2cInitialisationFunction = 3;
+		  }
+	  }
+
+	  if (I2cInitialisationFunction == 3)
+	  {
+		  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+		  {
+			  //clear message from display
+			  sprintf(tempstring, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
+			  uint16_t stringlength = strlen(tempstring);
+			  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+			  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+			  UartMsgSent = FLAG_SET;
+			  I2cInitialisationFunction = 0;
+		  }
+	  }
 
 
 	  if ((CanState & 0x01) != 0) //test for CAN error callback activity
@@ -267,10 +452,46 @@ int main(void)
 	  }
 
 
-	  if (CanDataReceived == FLAG_SET) //test for CAN receive complete callback activity
+
+	  if (ProcessRececivedCanData == FLAG_CLEAR) //don't grab more data until the previous data has been processsed and displayed.
 	  {
-		  CanDataReceived = FLAG_CLEAR;
-		  //output received CAN data
+		  if (CanDataReceived == FLAG_SET) //test for CAN receive complete callback activity
+		  {
+			  //grab a copy of the received data
+			  CanIdentifier = pCanRxHeader->StdId;
+			  CanDlc = pCanRxHeader->DLC;
+			  for (uint8_t i=0; i<CanDlc; i++)
+			  {
+				  CanData[i] = CanRxData[i];
+			  }
+
+			  ProcessRececivedCanData = FLAG_SET;
+			  CanDataReceived = FLAG_CLEAR;
+			  //output received CAN data
+		  }
+	  }
+
+
+	  if (ProcessRececivedCanData == FLAG_SET)
+	  {
+		  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+		  {
+			  char tempstring2[40] = "";
+			  sprintf(tempstring, "\e[21;1HCAN Id:0x%3X, DLC:%d, data:", CanIdentifier, CanDlc);
+			  for (uint8_t i=0; i<CanDlc; i++)
+			  {
+				  sprintf(tempstring2, "0x%02X, ", CanData[i]);
+				  strcat(tempstring, tempstring2);
+			  }
+
+			  uint16_t stringlength = strlen(tempstring);
+			  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+			  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+			  UartMsgSent = FLAG_SET;
+			  ProcessRececivedCanData = FLAG_CLEAR;
+		  }
+
+
 	  }
 
 
@@ -300,10 +521,11 @@ int main(void)
 
 	  if (timer1heartbeat == FLAG_SET)
 	  {
+		  //We get here after 100 timer interrupts have occurred
 		  timer1heartbeat = FLAG_CLEAR;
 
 
-
+		  //output a CAN message
 		  uint32_t x = 0;
 		  x = HAL_CAN_GetTxMailboxesFreeLevel(&hcan1);
 		  if (x != 0)
@@ -311,8 +533,8 @@ int main(void)
 			  uint8_t datapayload[8] = {};
 			  for (uint8_t i = 0; i<8; i++)
 			  {
-				  datapayload[i] = 0x10 + index;
-				  index++;
+				  datapayload[i] = 0x10 + candatacount;
+				  candatacount++;
 			  }
 			  //uint32_t Txmailbox = CAN_TX_MAILBOX0;
 			  uint32_t Txmailbox = 0xff;
@@ -322,6 +544,40 @@ int main(void)
 			  {
 				  //there is a problem with sending a CAN message...
 				  CanTxError = 1;
+			  }
+			  else
+			  {
+				  if (screenblock == FLAG_CLEAR)
+				  {
+					  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+					  {
+						  sprintf(tempstring, "\e[20;1HCAN message %3d", CanTxMsgCount);
+						  uint16_t stringlength = strlen(tempstring);
+						  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+						  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+						  UartMsgSent = FLAG_SET;
+						  CanTxMsgCount++;
+					  }
+				  }
+			  }
+			  CanTxMailboxfullmsg = FLAG_CLEAR; //allow TX mailbox full message to be displayed if the mailbox becomes full again!
+		  }
+		  else
+		  {
+			  if (CanTxMailboxfullmsg == FLAG_CLEAR)
+			  {
+				  if (screenblock == FLAG_CLEAR)
+				  {
+					  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+					  {
+						  sprintf(tempstring, "\e[20;1HCAN TX mailboxes FULL!");
+						  uint16_t stringlength = strlen(tempstring);
+						  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+						  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+						  UartMsgSent = FLAG_SET;
+						  CanTxMailboxfullmsg = FLAG_SET;
+					  }
+				  }
 			  }
 		  }
 
@@ -364,10 +620,13 @@ int main(void)
 			  HAL_GPIO_WritePin(GPIOD, SpiReset_Pin, GPIO_PIN_RESET);
 		  }
 
+	  }
 
-		  if (UartOutputFlag == FLAG_SET)
+	  if (UartOutputFlag == FLAG_SET) //flag set periodically by TIM ISR
+	  {
+		  if (screenblock == FLAG_CLEAR)
 		  {
-			  if (UartMsgSent == FLAG_CLEAR)
+			  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
 			  {
 
 				  UartOutputFlag = FLAG_CLEAR;
@@ -391,9 +650,6 @@ int main(void)
 		  }
 
 
-
-
-
 		  mainloopcount++;
 	  }
 
@@ -405,19 +661,344 @@ int main(void)
 
 			  //now test received string
 			  uint8_t commandlength = strlen(RxString);
-			  uint8_t comp = strcmp(RxString, "1234");
-			  char tmpstr[20] = "";
-			  if (comp == 0)
-			  {
+			  uint8_t comp = 0;
+			  char tmpstr[50] = "";
+			  recognisedstring = FLAG_CLEAR;
 
-				  sprintf(tmpstr, "\e[3;1H\e[K\e[1;37;42m"); //move cursor to 3rd line, clear text, white text on green background
-				  strcpy(tempstring, tmpstr);
-				  strcat(tempstring, "Recognised string");
-				  sprintf(tmpstr, "\e[0m"); //reset all attributes
-				  strcat(tempstring, tmpstr);
+			  if (commandlength == 4)
+			  {
+				  comp = strcmp(RxString, "I2C?");
+				  if (comp == 0)
+				  {
+					  struct I2cConfig tempstruct; //structure defined in GcI2cV1.c
+					  tempstruct = GetI2cConfig();
+
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, "I2C config:");
+
+					  sprintf(tmpstr, "\e[4;1H\e[KDevice address: 0x%02X", tempstruct.I2cDeviceAddress); //move cursor to 4th line, clear text,
+					  strcat(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[5;1H\e[KAddress width: %d", tempstruct.I2cInternalAddressWidth); //move cursor to 4th line, clear text,
+					  strcat(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[6;1H\e[KInternal address: 0x%04X", tempstruct.I2cInternalAddress); //move cursor to 4th line, clear text,
+					  strcat(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[7;1H\e[KQuantity: 0x%04X", tempstruct.I2cQuantity); //move cursor to 4th line, clear text,
+					  strcat(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+
+					  recognisedstring = FLAG_SET;
+				  }
+
+				  comp = strcmp(RxString, "I2CI");
+				  if (comp == 0)
+				  {
+					  //sprintf(tmpstr, "\e[3;1H\e[K\e[1;37;42m"); //move cursor to 3rd line, clear text, white text on green background
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, "I2C Initialisation");
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+
+					  recognisedstring = FLAG_SET;
+					  I2cInitialisationFunction = 1;  //initialise function call from within main loop
+				  }
+
+				  comp = strcmp(RxString, "I2CR");
+				  if (comp == 0)
+				  {
+					  //sprintf(tmpstr, "\e[3;1H\e[K\e[1;37;42m"); //move cursor to 3rd line, clear text, white text on green background
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, "I2C Read block");
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+
+					  recognisedstring = FLAG_SET;
+					  I2cReadBlockFunction = 1;
+					  screenblock = FLAG_SET; //prevent other main loop processed overwriting the screen
+				  }
+
+
+				  comp = strcmp(RxString, "1234");
+				  if (comp == 0)
+				  {
+
+					  sprintf(tmpstr, "\e[3;1H\e[K\e[1;37;42m"); //move cursor to 3rd line, clear text, white text on green background
+					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, "Recognised string");
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  recognisedstring = FLAG_SET;
+
+				  }
+			  }
+
+
+			  if (commandlength == 5)
+			  {
+					comp = strncmp(RxString, "I2CA", 4); //I2CAx
+					if (comp == 0)
+					{
+						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						strcat(tempstring, "I2C device address width set ");
+						uint8_t width = 0;
+						if (RxString[4] == '2')
+						{
+							width = 2;
+							strcat(tempstring, "2");
+						}
+						else
+						{
+							strcat(tempstring, "1");
+						}
+						SetInternalAddressWidth(width);
+						recognisedstring = FLAG_SET;
+					}
+			  }
+
+
+			  if (commandlength == 6)
+			  {
+				  comp = strncmp(RxString, "I2CD", 4); //I2CDxx
+				  if (comp == 0)
+				  {
+
+
+						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						strcat(tempstring, "I2C Device set: ");
+						sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+
+						char valstring[10] = "";
+						strncpy(valstring, RxString[4], 2); //obtain value characters
+
+						//set I2C device address
+						UserVal = ExtractValueFromString(RxString, 4, 2);
+						if ((UserVal & 0x80000000) == 0)
+						{
+							SetI2cDeviceAddress(UserVal & 0xFF);
+
+							/*
+							struct I2cConfig3{
+								uint16_t I2cInternalAddress;
+								uint16_t I2cQuantity;
+								uint8_t I2cInternalAddressWidth;
+								uint8_t I2cDeviceAddress;
+							};
+
+							struct I2cConfig3 tempstruct; //create an instance of a structure
+							struct I2cConfig3* structptr; //structure type declared in 'GcI2cC1.c'
+							*/
+							//struct I2cConfig4 tempstruct; //I2cConfig2 declared in global-settingsV1.h
+							//struct I2cConfig4* structptr;
+							//structptr = &tempstruct;
+							//ReadI2cConfig(structptr);
+							//ReadI2cConfig(&tempstruct);
+							struct I2cConfig tempstruct; //structure defined in GcI2cV1.c
+							tempstruct = GetI2cConfig();
+
+							sprintf(tmpstr, "I2C device address: 0x%02X", tempstruct.I2cDeviceAddress);
+							strcat(tempstring, tmpstr);
+						}
+						else
+						{
+							sprintf(tmpstr, "I2C device address set Error!");
+							strcat(tempstring, tmpstr);
+						}
+
+						sprintf(tmpstr, "\e[0m"); //reset all attributes
+						strcat(tempstring, tmpstr);
+						recognisedstring = FLAG_SET;
+
+				  }
+			  }
+
+			  if (commandlength == 8)
+			  {
+				  comp = strncmp(RxString, "I2CA", 4); //I2CAxxxx
+				  if (comp == 0)
+				  {
+
+
+						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						strcat(tempstring, "I2C Internal address set: ");
+
+
+						//char valstring[10] = "";
+						//strncpy(valstring, RxString[4], 2); //obtain value characters
+
+						//set I2C device address
+						UserVal = ExtractValueFromString(RxString, 4, 4);
+						if ((UserVal & 0x80000000) == 0)
+						{
+							SetI2cInternalAddress(UserVal & 0xFFFF);
+
+							struct I2cConfig tempstruct; //structure defined in GcI2cV1.c
+							tempstruct = GetI2cConfig();
+
+							sprintf(tmpstr, "I2C internal address: 0x%04X", tempstruct.I2cInternalAddress);
+							strcat(tempstring, tmpstr);
+						}
+						else
+						{
+							sprintf(tmpstr, "I2C internal address set Error!");
+							strcat(tempstring, tmpstr);
+						}
+
+
+						sprintf(tmpstr, "\e[0m"); //reset all attributes
+						strcat(tempstring, tmpstr);
+						recognisedstring = FLAG_SET;
+
+
+				  }
+
+
+
+				  comp = strncmp(RxString, "I2CQ", 4); //I2CQxxxx
+				  if (comp == 0)
+				  {
+					  	sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						strcat(tempstring, "Set Quantity Value");
+						UserVal = ExtractValueFromString(RxString, 4, 4);
+						if ((UserVal & 0x80000000) == 0)
+						{
+
+							sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+							strcat(tempstring, tmpstr);
+							sprintf(tmpstr, "Quantity: 0x%04X", (uint16_t)(UserVal & 0xFFFF));
+							strcat(tempstring, tmpstr);
+							sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 5th line, clear text,
+							strcat(tempstring, tmpstr);
+
+							SetI2cBlockSize(UserVal & 0xFFFF);
+							recognisedstring = FLAG_SET;
+						}
+						else
+						{
+
+						}
+						sprintf(tmpstr, "\e[0m"); //reset all attributes
+						strcat(tempstring, tmpstr);
+
+
+				  }
+
+				  comp = strncmp(RxString, "I2CR", 4); //I2CRxxxx
+				  if (comp == 0)
+				  {
+
+						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						strcat(tempstring, "Read byte from I2C: ");
+
+
+						//char valstring[10] = "";
+						//strncpy(valstring, RxString[4], 2); //obtain value characters
+
+						//set I2C device address
+						UserVal = ExtractValueFromString(RxString, 4, 4);
+						if ((UserVal & 0x80000000) == 0)
+						{
+							uint16_t addr = UserVal & 0xFFFF;
+
+							sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+							strcat(tempstring, tmpstr);
+							sprintf(tmpstr, "I2C internal address: 0x%04X", addr);
+							strcat(tempstring, tmpstr);
+							sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 5th line, clear text,
+							strcat(tempstring, tmpstr);
+
+							uint32_t data = 0;
+							data = I2cReadByte(addr);
+							if ( ((data >> 24) & 0xFF) == 0 )
+							{
+								//sprintf(tmpstr, "I2C read data: 0x%08lX", data);
+								sprintf(tmpstr, "I2C read data: 0x%02X", (uint8_t)(data & 0xFF));
+							}
+							else
+							{
+								sprintf(tmpstr, "There was a problem reading a byte from I2C memory!");
+							}
+							strcat(tempstring, tmpstr);
+
+
+
+						}
+						else
+						{
+							sprintf(tmpstr, "I2C read single byte Error! (0x%02lX)", (UserVal >> 24) & 0xFF);
+							strcat(tempstring, tmpstr);
+						}
+
+						sprintf(tmpstr, "\e[0m"); //reset all attributes
+						strcat(tempstring, tmpstr);
+						recognisedstring = FLAG_SET;
+
+				  }
 
 			  }
-			  else
+
+
+			  if (commandlength == 10)
+			  {
+				  comp = strncmp(RxString, "I2CW", 4); //I2CWaaaadd
+				  if (comp == 0)
+				  {
+
+						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						strcat(tempstring, "Write single byte to I2C");
+						sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcat(tempstring, tmpstr);
+						//process address and data values
+						UserVal = ExtractValueFromString(RxString, 4, 6);
+						if ((UserVal & 0x80000000) == 0)
+						{
+							uint16_t addr = UserVal >> 8;
+
+							sprintf(tmpstr, "\taddress: 0x%04X", addr);
+							strcat(tempstring,tmpstr);
+							//SendSerial(msg);
+							//SetI2cInternalAddress(addr);
+
+							uint8_t* pI2cData = 0;
+							//pI2cData = &I2cDataBuffer[0];
+							pI2cData = GetI2cData();
+							*pI2cData = UserVal & 0xFF;
+							sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 3rd line, clear text,
+							strcat(tempstring, tmpstr);
+							sprintf(tmpstr, "\tdata: 0x%02X", *pI2cData);
+							//SendSerial(msg);
+							strcat(tempstring,tmpstr);
+							uint32_t result = 0;
+							//result = I2cWriteByte(addr, UserVal & 0xFF);
+							//result = I2cWriteByteBlocking(addr, UserVal & 0xFF, 1);
+							result = I2cWriteByte(addr, (uint8_t)(UserVal & 0xFF), 1);
+							sprintf(tmpstr, "\e[6;1H\e[K"); //move cursor to 3rd line, clear text,
+							strcat(tempstring, tmpstr);
+							sprintf(tmpstr, "\tresponse: 0x%02X", (uint8_t)result);
+							//SendSerial(msg);
+							strcat(tempstring,tmpstr);
+						}
+						else
+						{
+							sprintf(tmpstr, "I2C write single byte command syntax Error!\r\n");
+							//SendSerial(msg);
+							strcat(tempstring,tmpstr);
+						}
+						recognisedstring = FLAG_SET;
+
+				  }
+			  }
+
+			  if (recognisedstring == FLAG_CLEAR)
 			  {
 				  sprintf(tmpstr, "\e[3;1H\e[K\e[1;37;41m"); //move cursor to 3rd line, clear text, white text on red background
 				  strcpy(tempstring, tmpstr);
@@ -476,6 +1057,17 @@ int main(void)
 			  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 			  strcat(tempstring, tmpstr);
 
+			  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
+			  strcat(tempstring, tmpstr);
+
+			  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 3rd line, clear text,
+			  strcat(tempstring, tmpstr);
+
+			  sprintf(tmpstr, "\e[6;1H\e[K"); //move cursor to 3rd line, clear text,
+			  strcat(tempstring, tmpstr);
+
+			  sprintf(tmpstr, "\e[7;1H\e[K"); //move cursor to 3rd line, clear text,
+			  strcat(tempstring, tmpstr);
 
 			  uint16_t stringlength = strlen(tempstring);
 			  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
@@ -490,6 +1082,9 @@ int main(void)
 			  EscapeClearCount = ESCAPEDISPLAYPERIOD; //value to be decremented by timer ISR
 
 			  RxState = RxState & 0xF7; //clear bit.
+
+			  screenblock = FLAG_CLEAR; //allows other main loop functions to update the display
+
 
 		  }
 	  }
@@ -757,8 +1352,8 @@ static void MX_CAN1_Init(void)
   hcan1.Init.Prescaler = 10;
   hcan1.Init.Mode = CAN_MODE_NORMAL;
   hcan1.Init.SyncJumpWidth = CAN_SJW_1TQ;
-  hcan1.Init.TimeSeg1 = CAN_BS1_1TQ;
-  hcan1.Init.TimeSeg2 = CAN_BS2_2TQ;
+  hcan1.Init.TimeSeg1 = CAN_BS1_2TQ;
+  hcan1.Init.TimeSeg2 = CAN_BS2_1TQ;
   hcan1.Init.TimeTriggeredMode = DISABLE;
   hcan1.Init.AutoBusOff = ENABLE;
   hcan1.Init.AutoWakeUp = ENABLE;
@@ -822,6 +1417,54 @@ static void MX_DAC1_Init(void)
   /* USER CODE BEGIN DAC1_Init 2 */
 
   /* USER CODE END DAC1_Init 2 */
+
+}
+
+/**
+  * @brief I2C2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C2_Init(void)
+{
+
+  /* USER CODE BEGIN I2C2_Init 0 */
+
+  /* USER CODE END I2C2_Init 0 */
+
+  /* USER CODE BEGIN I2C2_Init 1 */
+
+  /* USER CODE END I2C2_Init 1 */
+  hi2c2.Instance = I2C2;
+  hi2c2.Init.Timing = 0x00909BEB;
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Analogue filter
+  */
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Digital filter
+  */
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c2, 0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C2_Init 2 */
+
+  /* USER CODE END I2C2_Init 2 */
 
 }
 
@@ -993,14 +1636,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB13 PB14 */
-  GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_14;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF4_I2C2;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
   /*Configure GPIO pins : Backlight_Pin SpiReset_Pin HSD_1_Pin HSD_2_Pin
                            HSD_3_Pin HSD_4_Pin LSD_1_Pin LSD_2_Pin
                            LSD_3_Pin LSD_4_Pin */
@@ -1055,6 +1690,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		static uint16_t DacUpdatecount = TIMER1DACUPDATECOUNT;
 		static uint16_t UartUpdateCount = UARTUPDATEPERIOD;
 
+		if (FunctionDelay != 0)
+		{
+			FunctionDelay--;
+		}
 
 		if (EscapeClearCount != 0) //value set during main loop
 		{
@@ -1098,6 +1737,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			}
 		}
 
+		DecrementI2cTiming(); //Used as timout period for I2C comms
+
 	}
 }
 
@@ -1139,13 +1780,67 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 		{
 
 
-			uint8_t CanRxData[8] = {};
+
 			HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, pCanRxHeader, CanRxData);
 			CanDataReceived = FLAG_SET;
 
 		}
 	}
 }
+
+
+void HAL_I2C_MemTxCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+	//call back executed once all I2C bytes have been written to memory
+	//created 4NOV2021
+	//I2cStatus = I2cStatus | 0x04; //flag to main loop
+	SetI2cStatusBit(0x04);
+}
+
+
+void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+	//call back executed once all I2C bytes have been read from memory
+	//created 4NOV2021
+	//I2cStatus = I2cStatus | 0x08; //flag to main loop
+	SetI2cStatusBit(0x08);
+}
+
+
+void HAL_I2C_MasterRxCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+	//call back executed once all I2C bytes have been received via HAL_I2C_Master_Receive_IT()
+	//created 3NOV2021
+	//I2cStatus = I2cStatus | 0x02; //flag to main loop
+	SetI2cStatusBit(0x02);
+
+}
+
+
+void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+	//call back executed once all I2C bytes have been transmitted via HAL_I2C_Master_Transmit_IT()
+	//created 3NOV2021
+	//I2cStatus = I2cStatus | 0x01; //flag to main loop
+	SetI2cStatusBit(0x01);
+}
+
+void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c)
+{
+	//call back executed on detected I2C error...
+	//Created 5NOV2021
+	//I2cStatus = I2cStatus | 0x80; //flag to main loop
+	SetI2cStatusBit(0x80);
+}
+
+void HAL_I2C_AbortCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+	//call back executed on Master I2C abort execution
+	//Created 5NOV2021
+	//I2cStatus = I2cStatus | 0x40; //flag to main loop
+	SetI2cStatusBit(0x40);
+}
+
 
 
 
