@@ -2,7 +2,7 @@
  * GcI2cV1.h
  *
  *  Created on: 13 Dec 2022
- *  Last edited 28JUN2023
+ *  Last edited 17MAY2024
  *      Author: Geoff
  */
 
@@ -60,7 +60,7 @@
 	//uint32_t I2cWriteByte(uint16_t IntAddress, uint8_t data);
 	uint32_t I2cWriteByte(uint16_t IntAddress, uint8_t data, uint8_t DebugDisp);
 
-	uint8_t* ReadSmallI2CDatablock4(void); //returns a pointer to data block, first first element being a status byte,
+	uint8_t* ReadSmallI2CDatablock4(uint8_t control); //returns a pointer to data block, first first element being a status byte,
 	uint8_t ReadSmallI2CDatablock3(uint16_t intaddress, uint8_t BlockQty, uint8_t debugdata);
 	uint8_t ReadSmallI2CDatablock2(uint8_t debugdata);
 	uint8_t ReadSmallI2CDatablock(uint8_t device, uint8_t* pI2cData, uint16_t intaddress, uint8_t BlockQty, uint8_t debugdata);

@@ -2,7 +2,7 @@
  * GcI2cV1.c
  *
  *  Created on: 13 Dec 2022
- *  Last edited 25APR2024
+ *  Last edited 17MAY2024
  *      Author: Geoff
  */
 #include <global-settingsV1.h>
@@ -136,6 +136,7 @@ void SetI2cDeviceAddress(uint8_t address)
 	I2cConfigData.I2cDeviceAddress = address;
 }
 
+
 void SetI2cInternalAddress(uint16_t address)
 {
 	//Setter function
@@ -144,13 +145,16 @@ void SetI2cInternalAddress(uint16_t address)
 	I2cConfigData.I2cInternalAddress = address;
 }
 
+
 void SetI2cBlockSize(uint16_t Qty)
 {
 	//Setter function
 	//Created 13DEC2022
+	//Last edited 17MAY2024
 	I2cQuantity = Qty;
-	I2cConfigData.I2cInternalAddress = Qty;
+	I2cConfigData.I2cQuantity = Qty;
 }
+
 
 void SetInternalAddressWidth(uint8_t width)
 {
@@ -1228,11 +1232,11 @@ uint32_t I2cWriteByte(uint16_t IntAddress, uint8_t data, uint8_t DebugDisp)
 }
 
 
-uint8_t* ReadSmallI2CDatablock4(void)
+uint8_t* ReadSmallI2CDatablock4(uint8_t control)
 {
 	//function to read small block (256 bytes) of data from I2C memory but doesn't display anything
 	//Created 25APR2024
-	//Last edited 25APR2024
+	//Last edited 24MAY2024
 	//input:
 	//	debugdata:
 	//		0: no diagnostics serial output
@@ -1243,21 +1247,53 @@ uint8_t* ReadSmallI2CDatablock4(void)
 	HAL_StatusTypeDef halret;
 	char msg[100] = {};
 	char msgtemp[100] = {};
-	uint8_t* pI2cData = I2cDataBuffer; //0x40 bytes, first byte is a status byte
+	uint8_t* pI2cData = I2cDataBuffer; //0x40 bytes,
+										//byte[0] is a status byte,
+										//	1:specified data quantity read
+										//	2:timeout expired
+										//	4:failed to communicate with device - check device address
+										//	8:Device not ready
+										//	0x10: zero bytes specified
+										//
+										//byte[1,2] block start address
+										//byte[3] block byte qty
+										//byte[4...n] read data bytes
 	uint8_t n = 0;
+	uint8_t blocksize = 0x10;
+	uint16_t blockstartaddress = 0;
+	static uint16_t Qtyread = 0;
+	uint16_t blockqty = 0;
 
-	if (I2cConfigData.I2cQuantity < 0x40)
+	if (control == 0)
 	{
-		I2cStatus2 = 0;
+		Qtyread = 0; //reset read byte counter
+	}
 
-		halret = HAL_I2C_IsDeviceReady(&hi2c2, I2cConfigData.I2cDeviceAddress, I2cTrials, I2cTimeout);
-		if (halret == HAL_OK)
+
+	I2cStatus2 = 0;
+
+	halret = HAL_I2C_IsDeviceReady(&hi2c2, I2cConfigData.I2cDeviceAddress, I2cTrials, I2cTimeout);
+	if (halret == HAL_OK)
+	{
+		//receive data
+
+		//prepare to read memory header data
+		blockstartaddress = I2cConfigData.I2cInternalAddress + Qtyread;
+		blockqty = I2cConfigData.I2cQuantity - Qtyread;
+
+		if (blockqty > blocksize)
 		{
-			//receive data
+			blockqty = blocksize; //cap size of block
+		}
 
-			//prepare to read memory header data
 
-			halret = HAL_I2C_Mem_Read_IT(&hi2c2, I2cConfigData.I2cDeviceAddress, I2cConfigData.I2cDeviceAddress, I2C_MEMADD_SIZE_16BIT, pI2cData+1, I2cConfigData.I2cQuantity);
+		*(pI2cData + 1) = (uint8_t)(blockstartaddress >> 8);
+		*(pI2cData + 2) = (uint8_t)(blockstartaddress);
+		*(pI2cData + 3) = (uint8_t)(blockqty);
+
+		if (blockqty != 0)
+		{
+			halret = HAL_I2C_Mem_Read_IT(&hi2c2, I2cConfigData.I2cDeviceAddress, blockstartaddress, I2C_MEMADD_SIZE_16BIT, pI2cData+4, blockqty);
 			//Now need to wait until memory read transaction has completed...
 			if (halret == HAL_OK)
 			{
@@ -1278,47 +1314,61 @@ uint8_t* ReadSmallI2CDatablock4(void)
 					I2cStatus2 = I2cStatus2 & 0xFFF7; //reset control flag
 					*pI2cData = 0; //indicate no errors
 
+					Qtyread = Qtyread + blockqty;
+					if (Qtyread >= I2cConfigData.I2cQuantity)
+					{
+						*pI2cData = 1; //Indicate specified data block read has been completed
+					}
+
+
 				}
 				else
 				{
 					//timout expired
 
-//					sprintf(msg, "I2C read timeout expired! (I2cStatus: 0x%02lX)\r\n", I2cStatus);
-//					if (debugdata == 2)
-//					{
-//						SendDiagnostics(msg);
-//					}
-//					if (debugdata == 1)
-//					{
-//						SendSerial(msg);
-//					}
-//					ErrVal = 1;
-					*pI2cData = 1;
+	//					sprintf(msg, "I2C read timeout expired! (I2cStatus: 0x%02lX)\r\n", I2cStatus);
+	//					if (debugdata == 2)
+	//					{
+	//						SendDiagnostics(msg);
+	//					}
+	//					if (debugdata == 1)
+	//					{
+	//						SendSerial(msg);
+	//					}
+	//					ErrVal = 1;
+					*pI2cData = 2;
 				}
 
 
 			}
 			else
 			{
-//
-//				sprintf(msg, "I2C block read failed!\r\n");
-//				if (debugdata == 2)
-//				{
-//					SendDiagnostics(msg);
-//				}
-//				if (debugdata == 1)
-//				{
-//					SendSerial(msg);
-//				}
-//
-//				ErrVal = 2;
-				*pI2cData = 2;
+				//failed to commuinicate with I2C memory device
+	//
+	//				sprintf(msg, "I2C block read failed!\r\n");
+	//				if (debugdata == 2)
+	//				{
+	//					SendDiagnostics(msg);
+	//				}
+	//				if (debugdata == 1)
+	//				{
+	//					SendSerial(msg);
+	//				}
+	//
+	//				ErrVal = 2;
+				*pI2cData = 4;
 			}
 			//header data read
 		}
-
 		else
 		{
+			//no data bytes to read
+			*pI2cData = 0x10;
+		}
+	}
+
+	else
+	{
 //			sprintf(msg, "I2C device not ready!\r\n");
 //			if (debugdata == 2)
 //			{
@@ -1329,24 +1379,25 @@ uint8_t* ReadSmallI2CDatablock4(void)
 //				SendSerial(msg);
 //			}
 //			ErrVal = 3;
-			*pI2cData = 3;
-		}
+		*pI2cData = 8;
 	}
-	else
-	{
-//		sprintf(msg, "Specified block size too large!!\r\n");
-//		if (debugdata == 2)
-//		{
-//			SendDiagnostics(msg);
-//		}
-//		if (debugdata == 1)
-//		{
-//			SendSerial(msg);
-//		}
-//		ErrVal = 4;
-		*pI2cData = 4;
-	}
-	return pI2cData;
+//	}
+//	else
+//	{
+////		sprintf(msg, "Specified block size too large!!\r\n");
+////		if (debugdata == 2)
+////		{
+////			SendDiagnostics(msg);
+////		}
+////		if (debugdata == 1)
+////		{
+////			SendSerial(msg);
+////		}
+////		ErrVal = 4;
+//		*pI2cData = 4;
+//	}
+	//return pI2cData; //could use this is pI2cData was declared as static
+	return &I2cDataBuffer;
 }
 
 
