@@ -42,8 +42,9 @@
 #define TIMER1PERIOD  1000
 #define TIMER1DACUPDATECOUNT 1
 #define UARTUPDATEPERIOD 2000
-#define RXBUFFERLENGTH 200
+#define RXBUFFERLENGTH 300
 #define ESCAPEDISPLAYPERIOD 500
+#define OPBUFFERSIZE 200
 
 /* USER CODE END PD */
 
@@ -89,8 +90,8 @@ volatile static uint8_t RxState = 0; //UART3 state bits:
 										//4: clear escape character message from VT100 screeen
 										//5: set when received struing is to be processed
 
-volatile static uint8_t RxWritePtr = 0;
-volatile static uint8_t RxBufferCount = 0;
+volatile static uint16_t RxWritePtr = 0;
+volatile static uint16_t RxBufferCount = 0;
 
 volatile static uint16_t EscapeClearCount = 0;
 
@@ -144,7 +145,7 @@ int main(void)
 	char RxString[RXBUFFERLENGTH] = "";
 
 	uint8_t RxStringLen = 0;
-	uint8_t RxReadPtr = 0;
+	uint16_t RxReadPtr = 0;
 
 	char tmpstr[200] = "";
 	char tempstring[200] = "";
@@ -173,7 +174,11 @@ int main(void)
 	uint8_t xmodempacketblockno = 0;
 
 	uint8_t Tempdata[0x400] = {0};
-	uint16_t opptr = 0;
+	uint16_t opwriteptr = 0;
+	uint16_t opreadptr = 0;
+	uint16_t opbytecount = 0;
+	uint8_t linestring[100] = {0};
+	uint8_t linecharcount = 0;
 
   /* USER CODE END 1 */
 
@@ -369,7 +374,10 @@ int main(void)
 						XmodemStatus = 3;
 						Xmodempoacketcount = 0;
 						xmodempacketblockno = 1; //first xmodem block is labelled 1!
-						opptr = 0;	//reset output data pointer
+						opwriteptr = 0;	//reset output data pointer
+						opreadptr = 0;
+						opbytecount = 0;
+						linecharcount = 0;
 
 					}
 					break;
@@ -384,7 +392,7 @@ int main(void)
 						{
 
 							tempval = RxBufferCount; //obtain number of characters held in the 2ndary receive buffer
-							tempval = opptr;
+							//tempval = opwriteptr;
 
 							sprintf(tmpstr, "\e[3;1H\e[KX-modem timeout expired");
 							strcpy(tempstring, tmpstr);
@@ -476,8 +484,13 @@ int main(void)
 								{
 								  data = RxString[i+3];
 								  CalculareCrc16(data);
-								  Tempdata[opptr] = data;
-								  opptr++;
+								  Tempdata[opwriteptr] = data;
+								  opwriteptr++;
+								  if (opwriteptr >= OPBUFFERSIZE)
+								  {
+									  opwriteptr = 0;
+								  }
+								  opbytecount++;
 								}
 
 								//test calculated CRC with received value
@@ -504,11 +517,17 @@ int main(void)
 								{
 									tempstring[0] = 0x15; //NAK
 									tempstring[1] = 0; //string terminator
+									//reset timeout period
+									FunctionDelay = 5000; //value decremented by TIM ISR
+									XmodemStatus = 4; //wait for further data to arrive
 								}
 								else
 								{
-									tempstring[0] = 0x06; //ACK
-									tempstring[1] = 0; //string terminator
+									//X-modem packet CRC tested OK
+									XmodemStatus = 9;
+
+									//tempstring[0] = 0x06; //ACK
+									//tempstring[1] = 0; //string terminator
 								}
 							}
 						}
@@ -534,10 +553,76 @@ int main(void)
 
 
 					//reset timeout period
+					//FunctionDelay = 5000; //value decremented by TIM ISR
+					//XmodemStatus = 4; //wait for further data to arrive
+					break;
+
+
+				  case(9):
+					//X-modem packet has just been received
+					uint8_t data = 0;
+					while (opbytecount > 0)
+					{
+						data = Tempdata[opreadptr];
+
+						linestring[linecharcount] = data; //reconstruct line data
+						linecharcount++;
+						if (data == 0x0d)
+						{
+							XmodemStatus = 10;
+							break;
+						}
+
+
+
+						opreadptr++;
+						if (opreadptr >= OPBUFFERSIZE) //test for wrap around
+						{
+							opreadptr = 0;
+						}
+						opbytecount--; //decrement packet byte count
+					}
+
+
+					break;
+
+
+				  case(10):
+					//complete data line stripped from x-modem packet
+					//line characters are hekld in buffer 'linestring[]'
+					//number of characters on line is specified by 'linecharcount'
+					linecharcount = 0;
+				  	if (opbytecount != 0)
+				  	{
+				  		//further xmodem packet bytes need to be fed through the linestring buffer
+				  		XmodemStatus = 9;
+				  	}
+				  	else
+				  	{
+				  		//all packet data has been fed into the linestring buffer
+				  		XmodemStatus = 11;
+				  	}
+					break;
+
+
+				  case(11):
+					//x-modem packet has just been processed
+					//tempstring[0] = 0x06; //ACK
+					//tempstring[1] = 0; //string terminator
+
+					RxBufferCount = 0; //reset buffer count ready for next packet
+
+					stringlength = strlen(tempstring);
+					//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+					HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+					UartMsgSent = FLAG_SET;
+
+
+
+					//reset timeout period
 					FunctionDelay = 5000; //value decremented by TIM ISR
 					XmodemStatus = 4; //wait for further data to arrive
 					break;
-
 
 
 				  default:
