@@ -2,7 +2,7 @@
  * GcI2cV1.c
  *
  *  Created on: 13 Dec 2022
- *  Last edited 17MAY2024
+ *  Last edited 10JUL2024
  *      Author: Geoff
  */
 #include <global-settingsV1.h>
@@ -849,12 +849,13 @@ uint32_t I2cWriteBlock2(uint8_t* srcdata, uint8_t qty, uint8_t debugdata)
 	return ErrorVal;
 }
 
+
 uint32_t I2cWriteBlock(uint8_t DeviceAddress, uint16_t InternalAddress, uint8_t InternalAddressWidth, uint8_t* srcdata, uint8_t qty)
 {
 	//Function designed to write a block of data to an I2C memory device
 	//Used by serial commnand "XR" for testing
 	//Created 7FEB2022
-	//Last edited 13DEC2022
+	//Last edited 10JUL2024
 	//Input values:
 	//	DeviceAddress holds the I2C device address
 	//	InternalAddress holds the I2C internal memory address
@@ -887,7 +888,7 @@ uint32_t I2cWriteBlock(uint8_t DeviceAddress, uint16_t InternalAddress, uint8_t 
 		//transmit data
 		//HAL_StatusTypeDef y;
 		//prepare to write a single byte to the I2C device
-		halret = HAL_I2C_Mem_Write_IT(&hi2c2, DeviceAddress, InternalAddress, I2cInternalAddressWidth, srcdata, qty);
+		halret = HAL_I2C_Mem_Write_IT(&hi2c2, DeviceAddress, InternalAddress, (uint16_t)InternalAddressWidth, srcdata, (uint16_t)qty);
 
 		if (halret == HAL_OK)
 		{
@@ -907,13 +908,13 @@ uint32_t I2cWriteBlock(uint8_t DeviceAddress, uint16_t InternalAddress, uint8_t 
 				//we get here once the I2C transmit complete callback
 				I2cStatus2 = I2cStatus2 & 0xFFFB; //reset control flag
 				sprintf(msg, "I2C mem write complete!\r\n");
-				SendSerial(msg);
+				//SendSerial(msg);
 			}
 			else
 			{
 				ErrorVal = 3;
 				sprintf(msg, "timeout occurred whilst waiting for I2C mem write!\r\n");
-				SendSerial(msg);
+				//SendSerial(msg);
 			}
 
 		}
@@ -921,7 +922,7 @@ uint32_t I2cWriteBlock(uint8_t DeviceAddress, uint16_t InternalAddress, uint8_t 
 		{
 			ErrorVal = 2;
 			sprintf(msg, "I2C mem write Error!\r\n");
-			SendSerial(msg);
+			//SendSerial(msg);
 		}
 
 	}
@@ -929,7 +930,7 @@ uint32_t I2cWriteBlock(uint8_t DeviceAddress, uint16_t InternalAddress, uint8_t 
 	{
 		ErrorVal = 1;
 		sprintf(msg, "I2C Device busy!\r\n");
-		SendSerial(msg);
+		//SendSerial(msg);
 	}
 
 

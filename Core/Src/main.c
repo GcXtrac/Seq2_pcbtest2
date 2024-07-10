@@ -45,6 +45,7 @@
 #define RXBUFFERLENGTH 300
 #define ESCAPEDISPLAYPERIOD 500
 #define OPBUFFERSIZE 200
+#define MAXLINELENGTH 16
 
 /* USER CODE END PD */
 
@@ -177,8 +178,22 @@ int main(void)
 	uint16_t opwriteptr = 0;
 	uint16_t opreadptr = 0;
 	uint16_t opbytecount = 0;
-	uint8_t linestring[100] = {0};
+	uint8_t linestring[128] = {0}; //This needs to be large enough to hold a complete x-modem packet containing no CR characters
 	uint8_t linecharcount = 0;
+	uint8_t linecount = 0;
+	uint8_t linearray[0x400] = {0};
+	uint8_t dataformat = 1;	//0:text
+							//1: intel hex data
+
+	//used for Intel hex data decoding/buffering
+	uint8_t bytearray[16] = {0x00};
+	uint8_t* byteptr = &bytearray;
+
+	uint32_t address = 0;
+	uint32_t bytecount = 0;
+	uint8_t writeattempt = 0;
+
+
 
   /* USER CODE END 1 */
 
@@ -378,7 +393,7 @@ int main(void)
 						opreadptr = 0;
 						opbytecount = 0;
 						linecharcount = 0;
-
+						linecount = 0;
 					}
 					break;
 
@@ -515,8 +530,21 @@ int main(void)
 
 								if (tempval == 0)
 								{
+									//Packet CRC test failed, prepare to send NAK to get a new copy of the current packet
+									RxBufferCount = 0; //reset buffer count ready for next packet
+
+
+									__HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE); //re-enable receive interrupts
+
 									tempstring[0] = 0x15; //NAK
 									tempstring[1] = 0; //string terminator
+
+
+									stringlength = strlen(tempstring);
+									//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+									HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+									UartMsgSent = FLAG_SET;
+
 									//reset timeout period
 									FunctionDelay = 5000; //value decremented by TIM ISR
 									XmodemStatus = 4; //wait for further data to arrive
@@ -533,7 +561,7 @@ int main(void)
 						}
 					}
 
-					__HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE); //re-enable receive interrupts
+
 
 
 					//send initiation character for start of X-modem transfer
@@ -543,12 +571,12 @@ int main(void)
 					//tempstring[0] = 0x06; //ACK
 					//tempstring[1] = 0; //string terminator
 
-					RxBufferCount = 0; //reset buffer count ready for next packet
+					//RxBufferCount = 0; //reset buffer count ready for next packet
 
-					stringlength = strlen(tempstring);
+					//stringlength = strlen(tempstring);
 					//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
-					HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
-					UartMsgSent = FLAG_SET;
+					//HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+					//UartMsgSent = FLAG_SET;
 
 
 
@@ -560,20 +588,27 @@ int main(void)
 
 				  case(9):
 					//X-modem packet has just been received
+					//read out CR terminated strings
 					uint8_t data = 0;
 					while (opbytecount > 0)
 					{
 						data = Tempdata[opreadptr];
 
-						linestring[linecharcount] = data; //reconstruct line data
-						linecharcount++;
-						if (data == 0x0d)
+						//eliminatge LF character
+						uint8_t processlinechar = 1;
+						if (linecharcount == 0)
 						{
-							XmodemStatus = 10;
-							break;
+							if (data == 10) //test for Line feed (LF) character
+							{
+								processlinechar = 0;
+							}
 						}
 
-
+						if (processlinechar == 1) //ignore first character if it is a LF character
+						{
+							linestring[linecharcount] = data; //reconstruct line data
+							linecharcount++;
+						}
 
 						opreadptr++;
 						if (opreadptr >= OPBUFFERSIZE) //test for wrap around
@@ -581,36 +616,114 @@ int main(void)
 							opreadptr = 0;
 						}
 						opbytecount--; //decrement packet byte count
+
+						if (data == 0x0d)
+						{
+
+							if (linecount < 64)
+							{
+								for (uint8_t i=0; i<linecharcount; i++)
+								{
+									if (i == (MAXLINELENGTH - 1))
+									{
+										break;
+									}
+									linearray[(linecount*MAXLINELENGTH) + i] = linestring[i];
+								}
+							}
+							linecount++; //advance line counter
+
+
+							break;
+						}
+
 					}
 
-
+					XmodemStatus = 10;
 					break;
 
 
 				  case(10):
-					//complete data line stripped from x-modem packet
-					//line characters are hekld in buffer 'linestring[]'
+					//complete data line stripped from x-modem packet / remaining packet bytes are buffered as part of a new line
+					//line characters are held in buffer 'linestring[]'
 					//number of characters on line is specified by 'linecharcount'
-					linecharcount = 0;
-				  	if (opbytecount != 0)
-				  	{
-				  		//further xmodem packet bytes need to be fed through the linestring buffer
-				  		XmodemStatus = 9;
-				  	}
-				  	else
-				  	{
-				  		//all packet data has been fed into the linestring buffer
-				  		XmodemStatus = 11;
-				  	}
+					uint8_t lineprocessing = 0;
+					if (linestring[linecharcount-1] == 0x0d) //test for complete line
+					{
+						//determine data format
+						if (dataformat == 1)
+						{
+							//process line as intel hex data
+							if (linestring[0] == ':') //test for intel hex start of line character
+							{
+
+								//ExtractValueFromString(char* cmd_String, uint8_t charOffset, uint8_t charqty);
+								uint8_t checksum = 0;
+								bytecount = ExtractValueFromString((char*)linestring, 1, 2); //extract byte count from linestring
+								checksum = checksum + (uint8_t)bytecount;
+
+								address = ExtractValueFromString((char*)linestring, 3, 4); //extract destination address
+								checksum = checksum + (uint8_t)(address >> 8);
+								checksum = checksum + (uint8_t)address;
+
+								uint32_t record = ExtractValueFromString((char*)linestring, 7, 2); //extract destination address
+								checksum = checksum + (uint8_t)record;
+
+								uint32_t bytevalue = 0;
+								uint32_t recdchecksum = ExtractValueFromString((char*)linestring, 9 + (2*(uint8_t)bytecount), 2);
+								for (uint8_t i=0; i<(uint8_t)bytecount; i++)
+								{
+									bytevalue = ExtractValueFromString((char*)linestring, 9 + (2*i), 2);
+									checksum = checksum + (uint8_t)bytevalue;
+									bytearray[i] = (uint8_t)bytevalue;
+
+								}
+								checksum = checksum ^ 0xFF;
+								checksum = checksum + 1;
+								if (checksum == (uint8_t)recdchecksum)
+								{
+									writeattempt = 3;
+									XmodemStatus = 12;
+									lineprocessing = 1;
+
+
+
+								}
+								else
+								{
+									//there is a problem with the Intel hex data - terminate transfer at this point...
+								}
+							}
+
+						}
+						linecharcount = 0;
+					}
+
+					if (lineprocessing == 0) //check for line data processing completed.
+					{
+						if (opbytecount != 0)
+						{
+							//further xmodem packet bytes need to be fed through the linestring buffer
+							XmodemStatus = 9;
+						}
+						else
+						{
+							//all packet data has been fed into the linestring buffer
+							//linstring buffer my hold an incomplete line which will be completed with the next x-modem packet
+							XmodemStatus = 11;
+						}
+					}
 					break;
 
 
 				  case(11):
 					//x-modem packet has just been processed
-					//tempstring[0] = 0x06; //ACK
-					//tempstring[1] = 0; //string terminator
-
 					RxBufferCount = 0; //reset buffer count ready for next packet
+
+					tempstring[0] = 0x06; //ACK
+					tempstring[1] = 0; //string terminator
+
+					__HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE); //re-enable receive interrupts
 
 					stringlength = strlen(tempstring);
 					//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
@@ -625,6 +738,45 @@ int main(void)
 					break;
 
 
+				  case(12):
+					//Write Intel hex data block to destination memory
+
+					//byteptr = &bytearray;
+					//intel hex string is valid: computed checksum matches received checksum
+					//now write to target memory....
+					//uint32_t I2cWriteBlock(uint8_t DeviceAddress, uint16_t InternalAddress, uint8_t InternalAddressWidth, uint8_t* srcdata, uint8_t qty)
+					uint32_t I2cWriteState = 0;
+					I2cWriteState = I2cWriteBlock(0xA0, (uint16_t)address, 2, byteptr, (uint8_t)bytecount);
+
+					//need to check at some point that device write has completed.....
+					if (I2cWriteState == 1)
+					{
+						//I2C device was busy - unable to write block of data...
+						//prepare to try another write attempt
+						writeattempt--;
+						if (writeattempt == 0)
+						{
+							//terminate X-modem transfer
+							FunctionDelay = 5000;
+							XmodemStatus = 7;
+						}
+					}
+					else
+					{
+
+					  	if (opbytecount != 0)
+					  	{
+					  		//further xmodem packet bytes need to be fed through the linestring buffer
+					  		XmodemStatus = 9;
+					  	}
+					  	else
+					  	{
+					  		//all packet data has been fed into the linestring buffer
+					  		XmodemStatus = 11;
+					  	}
+					}
+					break;
+
 				  default:
 					XmodemStatus = 0;
 			  }
@@ -637,7 +789,7 @@ int main(void)
 		  //result of "I2CR" serial command; outputs block of I2c data to the display
 		  //use setup commands beforehand:
 		  //I2CDxx
-		  //I2cAxxxx
+		  //I2CAxxxx
 		  //I2cQxxx
 		  //I2CAx
 		  uint8_t* byteptr; //used to point to data returned from I2C read function
