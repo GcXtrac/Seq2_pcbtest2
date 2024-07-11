@@ -571,7 +571,7 @@ uint8_t WriteI2cDisplaydata(uint8_t I2cDevice, uint8_t LcdDataQty, uint8_t* pI2c
 uint32_t I2cWriteBlock2Blocking(uint8_t* srcdata, uint8_t qty, uint8_t debugdata)
 {
 	//Function designed to write a block of data to an I2C memory device
-	//Used by serial commnand "XR" for testing
+	//Used by serial command "XR" for testing
 	//Created 7FEB2022
 	//Last edited 8FEB2023
 	//Input values:
