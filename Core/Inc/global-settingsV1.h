@@ -6,7 +6,7 @@
  *      Author: Geoff
  */
 #include "stm32l4xx_hal.h"
-#ifndef INC_GLOBAL_SETTINGSV1_H_
+#ifndef INC_GLOBAL_SETTINGSV1_H_ //guard
 	#define INC_GLOBAL_SETTINGSV1_H_
 
 
@@ -27,8 +27,10 @@
 
 
 	#define SEQUENCERMEMORY 0xA0
-	#define HEADER 0x0020
-	#define MATTABLE 0X100;
+	#define SEQHEADERADDR 0x0020
+	#define MATTABLEADDR 0X100
+
+	#define BLOCKSIZE 0x10
 
 
 	struct I2cConfig4{

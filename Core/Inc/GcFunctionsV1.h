@@ -2,7 +2,7 @@
  * GcFunctionsV1.h
  *
  *  Created on: 26 Jan 2021
- *  Last edited 1AUG2023
+ *  Last edited 15JUL2024
  *      Author: Geoff
  */
 
@@ -10,6 +10,9 @@
 #define INC_GCFUNCTIONSV1_H_
 
 #include "stm32l4xx_hal.h"  //this needs to be included for the compiler to understand what a uint8_t data type is...
+
+
+
 
 uint32_t ascciichartohexnib(uint8_t charval);
 

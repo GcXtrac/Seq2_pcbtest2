@@ -2,7 +2,7 @@
  * GcFunctions.c
  *
  *  Created on: 26 Jan 2021
- *  Last edited 1AUG2023
+ *  Last edited 15JUL2024
  *      Author: Geoff
  */
 
@@ -32,6 +32,9 @@ static uint16_t Ihremainingbytes = 0;
 static uint32_t DelayVar = 0;
 static uint16_t ProcessPhase = 0; //updated from 8bit to 16bit value
 static uint8_t Process = 0;
+
+
+
 
 
 uint32_t ascciichartohexnib(uint8_t charval)

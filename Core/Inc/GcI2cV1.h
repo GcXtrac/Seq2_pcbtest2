@@ -27,6 +27,9 @@
 
 	struct I2cConfig GetI2cConfig(void);
 
+	uint32_t CheckHeaderBlock(void);
+	uint32_t UpdateSeqHeaderCrc(void);
+
 	void SetI2cDestPtr(uint16_t address);
 	void SetI2cSourcePtr(uint16_t address);
 
