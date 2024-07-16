@@ -62,22 +62,141 @@ struct I2cConfig GetI2cConfig(void) //fuction returns a structure called I2cConf
 }
 
 
+uint32_t WriteSeqData(uint8_t* bufferptr, uint8_t quantity, uint16_t destaddress)
+{
+	//Created 16JUL2024
+	uint32_t response = 0;
+
+	response = I2cWriteBlock(SEQUENCERMEMORY, destaddress, 2, bufferptr, quantity);
+	return response;
+}
+
+
+uint32_t ReadSeqMat(uint8_t index)
+{
+	//Read 8 byte MAT entry from I2C memory
+	//Created 16JUL2024
+	uint16_t address = 0;
+	uint16_t qty = 0;
+	uint8_t response = 0;
+	uint8_t MatBuffer[8] = {0};
+	uint8_t* MatBufferPtr = 0;
+
+	address = MATTABLEADDR + (index * SEQMATENTRYSIZE);
+
+	MatBufferPtr = &MatBuffer[0];
+
+
+	response = ReadSmallI2CDatablock5(SEQUENCERMEMORY, MatBufferPtr, address, SEQMATENTRYSIZE); //read a copy of the specified MAT entry
+	if (response == 0)
+	{
+		//Test MAT entry CRC
+		SetCrc16Value(0);
+		uint16_t tempval = 0;
+		tempval = CalculateBlockCrc(MatBufferPtr, (SEQMATENTRYSIZE-2));
+		if ((uint8_t)(tempval >>8) != *MatBufferPtr+6)
+		{
+			response = 4;
+		}
+		if ((uint8_t)(tempval) != *MatBufferPtr+7)
+		{
+			response = 5;
+		}
+
+		if (response == 0)
+		{
+			//obtain block start address and associated quantity to calculate new block start address
+			address = (uint16_t)((*MatBufferPtr) << 8) | (uint16_t) *(MatBufferPtr+1);
+			qty = (uint16_t)((*(MatBufferPtr+2)) << 8) | (uint16_t) *(MatBufferPtr+3);
+			address = address + qty;
+		}
+
+
+	}
+	return ((uint32_t)(response << 24) | (uint32_t)(address));
+}
+
+
+uint32_t ReadSeqHeader(uint8_t* bufferptr)
+{
+	//Read 8 byte Sequencer header data from I2C memory & check CRC value
+	//Created 16JUL2024
+	uint8_t response = 0;
+	//uint8_t ReadSmallI2CDatablock5(uint8_t device, uint8_t* pI2cData, uint16_t intaddress, uint8_t BlockQty)
+	response = ReadSmallI2CDatablock5(SEQUENCERMEMORY, bufferptr, SEQHEADERADDR, SEQHEADERSIZE); //read a copy of the specified MAT entry
+
+	if (response == 0) //check for issues whilst reading header data from I2C device
+	{
+		//Calculate CRC value
+		uint16_t tempval = 0;
+		uint32_t response = 0;
+		SetCrc16Value(0);
+		//uint16_t CalculateBlockCrc(uint8_t* pInt, uint16_t qty);
+		tempval = CalculateBlockCrc(bufferptr, 14); //ignore initial element (status byte)
+
+		if (*(bufferptr + 14) == (uint8_t)(tempval >> 8))
+		{
+			response = 4;
+		}
+		if (*(bufferptr + 15) != (uint8_t)tempval)
+		{
+			response = 5;
+		}
+
+
+	}
+
+	return (uint32_t)response;
+
+}
+
+
+uint32_t UpdateHeaderBlock(uint8_t* bufferptr)
+{
+	//Created 16JUL2024
+	//calculate CRC for Header data currently held in RAM
+	//write copy of data held in RAM comp;lete with updated CRC to I2C destination
+
+	uint32_t response = 0;
+
+	//Test MAT entry CRC
+	SetCrc16Value(0);
+	uint16_t tempval = 0;
+	tempval = CalculateBlockCrc(bufferptr, (SEQHEADERSIZE-2));
+	*(bufferptr+(SEQHEADERSIZE-2)) = (uint8_t)(tempval >>8);
+	*(bufferptr+(SEQHEADERSIZE-1)) = (uint8_t)tempval;
+
+
+
+	response = I2cWriteBlock(SEQUENCERMEMORY, SEQHEADERADDR, 2, bufferptr, SEQHEADERSIZE);
+	return response;
+
+}
+
+
 uint32_t CheckHeaderBlock(void)
 {
 	//Created 15JUl2024
 	HAL_StatusTypeDef halret;
 	uint32_t error = 0;
-	uint8_t bytebuffer[17] = {0}; //first element holds a status byte, while 16off remaining elements hold data
+	uint8_t bytebuffer[16] = {0}; //first element holds a status byte, while 16off remaining elements hold data
 	uint8_t* byteptr = 0;
 	byteptr = &bytebuffer[0];
+	//returns:
+	//	0: no issues
+	//	1: I2C device was busy
+	//	2: failed to communicate with I2C device
+	//	3: comms timeout expired
+	//	4: Header CRC low byte failed
+	//	5: Header CRC high byte failed
 
 
-	//read block of 14bytes from I2C memory
+	//read block of 16bytes from I2C memory
 	halret = HAL_I2C_IsDeviceReady(&hi2c2, SEQUENCERMEMORY, I2cTrials, I2cTimeout);
 	if (halret == HAL_OK)
 	{
 		//halret = HAL_I2C_Mem_Read_IT(&hi2c2, device, intaddress, 2, pI2cData, BlockQty);
-		halret = HAL_I2C_Mem_Read_IT(&hi2c2, SEQUENCERMEMORY, SEQHEADERADDR, 2, byteptr + 1, 16);
+		halret = HAL_I2C_Mem_Read_IT(&hi2c2, SEQUENCERMEMORY, SEQHEADERADDR, 2, byteptr, 16);
 		if (halret == HAL_OK)
 		{
 
@@ -95,13 +214,13 @@ uint32_t CheckHeaderBlock(void)
 			{
 				//we get here once the I2C 'receive complete' callback has been executed
 				I2cStatus2 = I2cStatus2 & 0xFFF7; //reset control flag
-				*byteptr = 0; //indicate no errors
+				error = 0; //indicate no errors
 
 			}
 			else
 			{
 				//timout expired
-				*byteptr = 2;
+				error = 3;
 			}
 
 
@@ -109,11 +228,11 @@ uint32_t CheckHeaderBlock(void)
 		else
 		{
 			//failed to communicate with I2C memory device
-			*byteptr = 4;
+			error = 2;
 		}
 		//header data read
 
-		if (*byteptr == 0) //check for issues whilst reading header data from I2C device
+		if (error == 0) //check for issues whilst reading header data from I2C device
 		{
 			//Calculate CRC value
 			uint16_t tempval = 0;
@@ -124,24 +243,20 @@ uint32_t CheckHeaderBlock(void)
 
 			if (*(byteptr + 15) == (uint8_t)(tempval >> 8))
 			{
-				if (*(byteptr + 16) == (uint8_t)tempval)
-				{
-					error = 0;
-				}
-				else
-				{
-					error = 2;
-				}
+				error = 4;
 			}
-			else
+			if (*(byteptr + 16) != (uint8_t)tempval)
 			{
-				error = 3;
+				error = 5;
 			}
+
+
 		}
-		else
-		{
-			error = 1;
-		}
+
+	}
+	else
+	{
+		error = 1;
 	}
 	return error;
 }
@@ -1395,6 +1510,160 @@ uint32_t I2cWriteByte(uint16_t IntAddress, uint8_t data, uint8_t DebugDisp)
 }
 
 
+uint8_t ReadSmallI2CDatablock5(uint8_t device, uint8_t* pI2cData, uint16_t intaddress, uint8_t BlockQty)
+{
+	//function to read small block (256 bytes) of data from I2C memory
+	//Created 16JUL2024
+	//Last edited 16JUL2024
+	//returns:
+	//	0: No issues
+	//	1: timeout expired
+	//	2: block ad failed
+
+	uint8_t ErrVal = 0;
+	HAL_StatusTypeDef halret;
+	char msg[100] = {};
+	char msgtemp[100] = {};
+	I2cStatus2 = 0;
+
+	halret = HAL_I2C_IsDeviceReady(&hi2c2, device, I2cTrials, I2cTimeout);
+	if (halret == HAL_OK)
+	{
+		//receive data
+
+		//prepare to read memory header data
+
+		halret = HAL_I2C_Mem_Read_IT(&hi2c2, device, intaddress, 2, pI2cData, BlockQty);
+		//Now need to wait until memory read transaction has completed...
+		if (halret == HAL_OK)
+		{
+
+			I2cTiming2 = 100; //TIM2 will decrement this value
+			while ((I2cStatus2 & 0x08) == 0)
+			{
+				if (I2cTiming2 == 0)
+				{
+					//timeout period expired
+					break;
+				}
+			}
+
+			if ((I2cStatus2 & 0x08) != 0) //flag set by HAL_I2C_MasterRxCpltCallBack
+			{
+				//we get here once the I2C 'receive complete' callback has been executed
+				I2cStatus2 = I2cStatus2 & 0xFFF7; //reset control flag
+
+//				if (debugdata != 0)
+//				{
+//					uint8_t n = 0;
+//					for (int i=0; i<BlockQty; i++)
+//					{
+//						if ((n & 0x0F) == 0)
+//						{
+//
+//							if (i != 0)
+//							{
+//								sprintf(msgtemp, "\r\n");
+//								strcat (msg, msgtemp);
+//								if (debugdata == 2)
+//								{
+//									SendDiagnostics(msg);
+//
+//								}
+//								if (debugdata == 1)
+//								{
+//									SendSerial(msg);
+//								}
+//							}
+//							//start a new line
+//							sprintf(msg, "\r\na:0x%04X, ", intaddress+i);
+//							if (debugdata == 2)
+//							{
+//								SendDiagnostics(msg);
+//
+//							}
+//							if (debugdata == 1)
+//							{
+//								SendSerial(msg);
+//							}
+//							strcpy(msg,""); //clear string
+//							n = 0;
+//						}
+//						//sprintf(msgtemp, "0x%02X, ", *(pI2cData+i));
+//						sprintf(msgtemp, "%02X ", *(pI2cData+i));
+//						strcat (msg, msgtemp);
+//						n++;
+//					}
+
+
+//					sprintf(msgtemp, "\r\n");
+//					strcat (msg, msgtemp);
+//					if (debugdata == 2)
+//					{
+//						SendDiagnostics(msg);
+//					}
+//					if (debugdata == 1)
+//					{
+//						SendSerial(msg);
+//					}
+//				}
+
+
+			}
+
+			else
+			{
+				//timout expired
+//				sprintf(msg, "I2C read timeout expired! (I2cStatus: 0x%02lX)\r\n", I2cStatus);
+//				if (debugdata == 2)
+//				{
+//					SendDiagnostics(msg);
+//
+//				}
+//				if (debugdata == 1)
+//				{
+//					SendSerial(msg);
+//				}
+
+				ErrVal = 1;
+			}
+
+
+		}
+		else
+		{
+//			sprintf(msg, "I2C block read failed!\r\n");
+//			if (debugdata == 2)
+//			{
+//				SendDiagnostics(msg);
+//			}
+//			if (debugdata == 1)
+//			{
+//				SendSerial(msg);
+//			}
+			ErrVal = 2;
+		}
+		//header data read
+	}
+
+	else
+	{
+//		sprintf(msg, "I2C device not ready!\r\n");
+//		if (debugdata == 2)
+//		{
+//			SendDiagnostics(msg);
+//		}
+//		if (debugdata == 1)
+//		{
+//			SendSerial(msg);
+//		}
+		ErrVal = 3;
+	}
+
+	return ErrVal;
+}
+
+
 uint8_t* ReadSmallI2CDatablock4(uint8_t control)
 {
 	//function to read small block (256 bytes) of data from I2C memory but doesn't display anything
@@ -1589,7 +1858,7 @@ uint8_t ReadSmallI2CDatablock3(uint16_t intaddress, uint8_t BlockQty, uint8_t de
 
 	if (BlockQty < 0x40)
 	{
-		I2cStatus = 0;
+		I2cStatus2 = 0;
 
 		halret = HAL_I2C_IsDeviceReady(&hi2c2, I2cDeviceAddress, I2cTrials, I2cTimeout);
 		if (halret == HAL_OK)
@@ -1692,7 +1961,7 @@ uint8_t ReadSmallI2CDatablock3(uint16_t intaddress, uint8_t BlockQty, uint8_t de
 				{
 					//timout expired
 
-					sprintf(msg, "I2C read timeout expired! (I2cStatus: 0x%02lX)\r\n", I2cStatus);
+					sprintf(msg, "I2C read timeout expired! (I2cStatus2: 0x%02lX)\r\n", I2cStatus2);
 					if (debugdata == 2)
 					{
 						SendDiagnostics(msg);
@@ -1856,7 +2125,7 @@ uint8_t ReadSmallI2CDatablock2(uint8_t debugdata)
 			{
 				//timout expired
 
-				sprintf(msg, "I2C read timeout expired! (I2cStatus: 0x%02lX)\r\n", I2cStatus);
+				sprintf(msg, "I2C read timeout expired! (I2cStatus2: 0x%02lX)\r\n", I2cStatus2);
 				if (debugdata == 2)
 				{
 					SendDiagnostics(msg);
@@ -1917,7 +2186,7 @@ uint8_t ReadSmallI2CDatablock(uint8_t device, uint8_t* pI2cData, uint16_t intadd
 	HAL_StatusTypeDef halret;
 	char msg[100] = {};
 	char msgtemp[100] = {};
-	I2cStatus = 0;
+	I2cStatus2 = 0;
 
 	halret = HAL_I2C_IsDeviceReady(&hi2c2, device, I2cTrials, I2cTimeout);
 	if (halret == HAL_OK)
@@ -2007,7 +2276,7 @@ uint8_t ReadSmallI2CDatablock(uint8_t device, uint8_t* pI2cData, uint16_t intadd
 			else
 			{
 				//timout expired
-				sprintf(msg, "I2C read timeout expired! (I2cStatus: 0x%02lX)\r\n", I2cStatus);
+				sprintf(msg, "I2C read timeout expired! (I2cStatus2: 0x%02lX)\r\n", I2cStatus2);
 				if (debugdata == 2)
 				{
 					SendDiagnostics(msg);
@@ -2230,7 +2499,7 @@ uint8_t I2cReadBlock(void)
 					else
 					{
 						//timout expired
-						sprintf(msg, "timeout expired! (I2cStatus: 0x%02lX)\r\n", I2cStatus);
+						sprintf(msg, "timeout expired! (I2cStatus2: 0x%02lX)\r\n", I2cStatus2);
 						SendSerial(msg);
 						ErrVal = 4;
 						break;
@@ -2304,8 +2573,8 @@ uint8_t	SendI2cData(uint16_t I2cDeviceAddress, uint8_t* pI2cData, uint8_t LcdDat
 
 			//delay: wait for write cycle to complete
 			I2cTiming2 = 100;
-			//while((I2cStatus & 0x04) == 0) //flag set by HAL_I2C_MemTxCpltCallBack
-			while((I2cStatus & 0x01) == 0) //flag set by HAL_I2C_MasterTxCpltCallBack
+			//while((I2cStatus2 & 0x04) == 0) //flag set by HAL_I2C_MemTxCpltCallBack
+			while((I2cStatus2 & 0x01) == 0) //flag set by HAL_I2C_MasterTxCpltCallBack
 			{
 				if(I2cTiming2 == 0) //value decremented by TIM2 ISR
 				{
@@ -2322,10 +2591,10 @@ uint8_t	SendI2cData(uint16_t I2cDeviceAddress, uint8_t* pI2cData, uint8_t LcdDat
 			}
 
 			//if ((I2cStatus & 0x04) != 0) //flag set by HAL_I2C_MemTxCpltCallBack
-			if ((I2cStatus & 0x01) != 0) //flag set by HAL_I2C_MasterTxCpltCallBack
+			if ((I2cStatus2 & 0x01) != 0) //flag set by HAL_I2C_MasterTxCpltCallBack
 			{
 				//we get here once the I2C transmit complete callback
-				I2cStatus = I2cStatus & 0xFFFE; //reset control flag
+				I2cStatus2 = I2cStatus2 & 0xFFFE; //reset control flag
 			}
 			else
 			{

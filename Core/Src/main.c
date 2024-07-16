@@ -146,6 +146,7 @@ enum SeqDecode {
 				ANALOGOUT = 4,
 				SEQHEADER = 5,
 				SEQCYCLECOUNT = 6,
+				COMMENT = 7,
 			};
 
 
@@ -210,7 +211,11 @@ int main(void)
 	uint8_t FillI2cMemoryFunction = 0; //Main loop function controlling variable
 	uint16_t blockcount = 0;
 
-
+	uint16_t StepIndex = 0;
+	uint16_t SeqCmdError = 0;
+								//0x10 problem obtaining header data
+								//0x11 received sequencer index specifies data that already exists
+								//0x20 problem storing sequencer command string.
 
   /* USER CODE END 1 */
 
@@ -727,120 +732,213 @@ int main(void)
 							//uint8_t addtovaluestring = 0;
 							uint8_t cmdcharcount = 0;
 
+							uint8_t commanddata[CMDMAXLENGTH + 2] = {0};
+							uint8_t cmddatacounter = 0;
+
+
 							for (uint8_t i=0; i<linecharcount; i++)
 							{
 								if (linestring[i] == ';') //test for line comment
 								{
+									SeqConfigDecode = COMMENT;
+
+
+									//store command string to I2C memory
+
+									//obtain next available memory location
+									uint32_t response = 0;
+									uint16_t address = 0;
+									uint8_t error = 0;
+									response = ReadSeqMat(StepIndex - 1);
+									if ((response >> 24) == 0)
+									{
+										address = (uint16_t)response;
+
+										//generate data CRC value
+										SetCrc16Value(0);
+										uint16_t tempval = 0;
+										tempval = CalculateBlockCrc(&commanddata[0], cmddatacounter);
+										commanddata[cmddatacounter + 1] = (uint8_t)(tempval >> 8);
+										commanddata[cmddatacounter + 2] = (uint8_t)tempval;
+
+										response = WriteSeqData(&commanddata, cmddatacounter + 2, address);
+
+									}
+									if (response == 0)
+									{
+										//update MAT entry
+										*byteptr = (uint8_t)(address >> 8);
+										*(byteptr+1) = (uint8_t)address;
+										*(byteptr+2) = 0;
+										*(byteptr+3) = cmddatacounter + 2;
+										*(byteptr+4) = FILLVALUE;
+										*(byteptr+5) = FILLVALUE;
+
+										SetCrc16Value(0);
+										uint16_t tempval = 0;
+										tempval = CalculateBlockCrc(*byteptr, SEQMATENTRYSIZE-2);
+										*(byteptr+6) = (uint8_t)(tempval >> 8);
+										*(byteptr+7) = (uint8_t)tempval;
+
+										response = I2cWriteBlock(SEQUENCERMEMORY, MATTABLEADDR + (StepIndex * SEQMATENTRYSIZE), 2, byteptr, SEQMATENTRYSIZE);
+									}
+									else
+									{
+										error = 1;
+									}
+
+									if (response == 0)
+									{
+										//MAT entry was updated successfully
+										StepIndex++;
+
+										//now update sequencer header data
+										response = ReadSeqHeader(byteptr);
+										if (response == 0)
+										{
+
+
+											*byteptr = (uint8_t)(StepIndex >> 8);
+											*(byteptr+1) = (uint8_t)StepIndex;
+
+											response = UpdateHeaderBlock(byteptr);
+
+
+										}
+										else
+										{
+											error = 2;
+										}
+									}
+									if (error != 0)
+									{
+										SeqCmdError = 20;	//stop further decoding of sequencer command strings
+									}
 
 								}
-								if (SeqConfigDecode == NONE)
+
+
+
+
+								if (SeqConfigDecode != COMMENT)
 								{
-									if (cmdcharcount == 0)
+									if (cmddatacounter < CMDMAXLENGTH)
 									{
-										if (linestring[i] == 'A')
-										{
-											cmdcharcount++;
-											valcharcount = 0;
-										}
-
-										if (linestring[i] == 'C')
-										{
-											cmdcharcount++;
-											valcharcount = 0;
-										}
-
-										if (linestring[i] == 'D')
-										{
-											cmdcharcount++;
-											valcharcount = 0;
-										}
-
-										if (linestring[i] == 'H')
-										{
-											cmdcharcount++;
-											valcharcount = 0;
-										}
-
-										if (linestring[i] == 'S')
-										{
-											cmdcharcount++;
-											valcharcount = 0;
-										}
-
-										if (linestring[i] == 'T')
-										{
-											cmdcharcount++;
-											valcharcount = 0;
-										}
+										commanddata[cmddatacounter] = linestring[i];
+										cmddatacounter++;
 									}
 
-									else if (cmdcharcount == 1)
+									if (SeqConfigDecode == NONE)
 									{
-										if (linestring[i-1] == 'A')
-										{
-											if (linestring[i] == 'd')
-											{
-												SeqConfigDecode = ANALOGOUT;
-												cmdcharcount++;
-											}
-										}
-
-										if (linestring[i-1] == 'C')
-										{
-											if (linestring[i] == 'Y')
-											{
-												cmdcharcount++;
-											}
-										}
-
-										if (linestring[i-1] == 'D')
-										{
-											if (linestring[i] == 'D')
-											{
-												SeqConfigDecode = DIGITALOUT;
-												cmdcharcount++;
-											}
-										}
-
-										if (linestring[i-1] == 'H')
-										{
-											if (linestring[i] == 'E')
-											{
-												cmdcharcount++;
-											}
-										}
-
-									}
-									else if (cmdcharcount == 2)
-									{
-										if (linestring[i-1] == 'Y')
-										{
-											if (linestring[i] == 'C')
-											{
-												SeqConfigDecode = SEQCYCLECOUNT;
-												cmdcharcount++;
-											}
-										}
-
-										if (linestring[i-1] == 'E')
+										if (cmdcharcount == 0)
 										{
 											if (linestring[i] == 'A')
 											{
 												cmdcharcount++;
+												valcharcount = 0;
 											}
-										}
-									}
 
+											if (linestring[i] == 'C')
+											{
+												cmdcharcount++;
+												valcharcount = 0;
+											}
 
-									else if (cmdcharcount == 3)
-									{
-
-										if (linestring[i-1] == 'A')
-										{
 											if (linestring[i] == 'D')
 											{
-												SeqConfigDecode = SEQHEADER;
 												cmdcharcount++;
+												valcharcount = 0;
+											}
+
+											if (linestring[i] == 'H')
+											{
+												cmdcharcount++;
+												valcharcount = 0;
+											}
+
+											if (linestring[i] == 'S')
+											{
+												SeqConfigDecode = STEP;
+												cmdcharcount++;
+												valcharcount = 0;
+											}
+
+											if (linestring[i] == 'T')
+											{
+												SeqConfigDecode = TIME;
+												cmdcharcount++;
+												valcharcount = 0;
+											}
+										}
+
+										else if (cmdcharcount == 1)
+										{
+											if (linestring[i-1] == 'A')
+											{
+												if (linestring[i] == 'd')
+												{
+													SeqConfigDecode = ANALOGOUT;
+													cmdcharcount++;
+												}
+											}
+
+											if (linestring[i-1] == 'C')
+											{
+												if (linestring[i] == 'Y')
+												{
+													cmdcharcount++;
+												}
+											}
+
+											if (linestring[i-1] == 'D')
+											{
+												if (linestring[i] == 'D')
+												{
+													SeqConfigDecode = DIGITALOUT;
+													cmdcharcount++;
+												}
+											}
+
+											if (linestring[i-1] == 'H')
+											{
+												if (linestring[i] == 'E')
+												{
+													cmdcharcount++;
+												}
+											}
+
+										}
+										else if (cmdcharcount == 2)
+										{
+											if (linestring[i-1] == 'Y')
+											{
+												if (linestring[i] == 'C')
+												{
+													SeqConfigDecode = SEQCYCLECOUNT;
+													cmdcharcount++;
+												}
+											}
+
+											if (linestring[i-1] == 'E')
+											{
+												if (linestring[i] == 'A')
+												{
+													cmdcharcount++;
+												}
+											}
+										}
+
+
+										else if (cmdcharcount == 3)
+										{
+
+											if (linestring[i-1] == 'A')
+											{
+												if (linestring[i] == 'D')
+												{
+													SeqConfigDecode = SEQHEADER;
+													cmdcharcount++;
+												}
 											}
 										}
 									}
@@ -861,12 +959,38 @@ int main(void)
 
 
 										//ExtractValueFromString((char*) linestring, i - valcharcount, valcharcount);
-										UserVal = ExtractValueFromString(RxString, 4, 2);
+										UserVal = ExtractValueFromString(RxString, cmdcharcount, valcharcount);
 										if ((UserVal & 0x80000000) == 0)
 										{
 										//now do something with value
 										//write to memory block
 										//update MAT
+
+											if (SeqConfigDecode == STEP)
+											{
+												//check that specified step doesn't already exist
+												//check that step number falls outside steps specified in sequencer header
+												Response = ReadSeqHeader(byteptr);
+												if (Response == 0)
+												{
+													//read sequencer header data
+													uint16_t tempval = 0;
+													tempval = (uint16_t)(*(byteptr) << 8) | (uint16_t)*(byteptr + 1);
+													if ((UserVal & 0xFFFF) >= tempval)
+													{
+														SeqCmdError = 0x11;
+													}
+
+
+												}
+												else
+												{
+													//STEP error
+													SeqCmdError = 0x10;
+												}
+
+											}
+
 
 											if (SeqConfigDecode == SEQCYCLECOUNT)
 											{
@@ -912,6 +1036,11 @@ int main(void)
 
 					if (lineprocessing == 0) //check for line data processing completed.
 					{
+						if (SeqCmdError != 0) //determine if a problem has been found with most recent received data
+						{
+							XmodemStatus = 5; //terminate further X-modem comms
+						}
+
 						if (opbytecount != 0)
 						{
 							//further xmodem packet bytes need to be fed through the linestring buffer
@@ -1048,7 +1177,7 @@ int main(void)
 								blockcount++;
 
 								for (uint8_t i = 0; i<BLOCKSIZE-1; i++)
-									*(byteptr+i) = *byteptr;
+									*(byteptr + 1 + i) = *byteptr;
 
 								uint32_t response = 0;
 								//uint32_t I2cWriteBlock(uint8_t DeviceAddress, uint16_t InternalAddress, uint8_t InternalAddressWidth, uint8_t* srcdata, uint8_t qty);
@@ -1097,11 +1226,16 @@ int main(void)
 					{
 						sprintf(tmpstr, "\e[6;1H\e[KBlock fill completed");
 						strcpy(tempstring, tmpstr);
-						FillI2cMemoryFunction = 0; //terminate the function
+						sprintf(tmpstr, "\e[7;1H\e[K"); //clear line 7
+						strcpy(tempstring, tmpstr);
+
+
 						uint16_t stringlength = strlen(tempstring);
 						//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
 						HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
 						UartMsgSent = FLAG_SET;
+
+						FillI2cMemoryFunction = 0; //terminate the function
 					}
 					break;
 
@@ -1618,8 +1752,7 @@ int main(void)
 				  comp = strcmp(RxString, "CH");
 				  if (comp == 0)
 				  {
-					  //Enable X modem receive
-					  XmodemStatus = 1;
+					  //Check sequencer header data
 
 					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 					  strcpy(tempstring, tmpstr);
@@ -1634,11 +1767,15 @@ int main(void)
 					  tempval = CheckHeaderBlock();
 					  if (tempval == 0)
 					  {
+						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
 						  sprintf(tmpstr, " CRC OK"); //reset all attributes
 						  strcat(tempstring, tmpstr);
 					  }
 					  else
 					  {
+						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
 						  sprintf(tmpstr, " CRC FAILED!"); //reset all attributes
 						  strcat(tempstring, tmpstr);
 					  }
@@ -1683,7 +1820,7 @@ int main(void)
 					  intptr = &tempbuffer[0];
 
 					  tempbuffer[0] = 0x00;
-					  tempbuffer[1] = 0x05;
+					  tempbuffer[1] = 0x00;
 					  tempbuffer[2] = 0x00;	//MAT table address
 					  tempbuffer[3] = 0x80;
 					  tempbuffer[4] = 0x01;	//data start address
@@ -1705,12 +1842,21 @@ int main(void)
 					  tempbuffer[14] = (uint8_t)(temp>>8);
 					  tempbuffer[15] = (uint8_t)temp;
 
+					  StepIndex = 0;
+					  SeqCmdError = 0;
+
 					  //I2cWriteBlock(uint8_t DeviceAddress, uint16_t InternalAddress, uint8_t InternalAddressWidth, uint8_t* srcdata, uint8_t qty);
 					  uint32_t response = 0;
 					  response = I2cWriteBlock(SEQUENCERMEMORY, SEQHEADERADDR, 2, intptr, 16);
 					  if (response != 0)
 					  {
+						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcat(tempstring, tmpstr);
 						  sprintf(tmpstr, "FAILED to write header data"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "(response = 0x%02X)", response); //reset all attributes
 						  strcat(tempstring, tmpstr);
 					  }
 					  else
@@ -1718,6 +1864,8 @@ int main(void)
 						  response = UpdateSeqHeaderCrc(); //update header data block held in I2C memory
 						  if (response == 0)
 						  {
+							  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
+							  strcat(tempstring, tmpstr);
 							  sprintf(tmpstr, "OK"); //reset all attributes
 							  strcat(tempstring, tmpstr);
 						  }
@@ -1829,34 +1977,7 @@ int main(void)
 			  if (commandlength == 6)
 			  {
 
-				  comp = strncmp(RxString, "FILL", 4); //FILLxx
-				  if (comp == 0)
-				  {
 
-						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
-						strcpy(tempstring, tmpstr);
-						strcat(tempstring, "Fill I2C memory: ");
-						sprintf(tmpstr, "\e[4;1H\e[K"); //
-						strcpy(tempstring, tmpstr);
-
-						char valstring[10] = "";
-						strncpy(valstring, &RxString[4], 2); //obtain value characters
-
-						//set I2C device address
-						UserVal = ExtractValueFromString(RxString, 4, 2);
-						if ((UserVal & 0x80000000) == 0)
-						{
-							FillI2cMemoryFunction = 1;
-							*byteptr = (uint8_t)UserVal; //record fill data value
-							FunctionDelay = 1000; //value decremented by TIM ISR
-							recognisedstring = FLAG_SET;
-						}
-						else
-						{
-							sprintf(tmpstr, " ERROR!"); //
-							strcat(tempstring, tmpstr);
-						}
-				  }
 
 				  comp = strncmp(RxString, "I2CD", 4); //I2CDxx
 				  if (comp == 0)
@@ -1954,7 +2075,35 @@ int main(void)
 
 				  }
 
+				  comp = strncmp(RxString, "I2CF", 4); //I2CFxx
+				  if (comp == 0)
+				  {
 
+					  	//Fill block of I2C memory
+						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						strcat(tempstring, "Fill I2C memory: ");
+						sprintf(tmpstr, "\e[4;1H\e[K"); //
+						strcpy(tempstring, tmpstr);
+
+						char valstring[10] = "";
+						strncpy(valstring, &RxString[4], 2); //obtain value characters
+
+						//set I2C device address
+						UserVal = ExtractValueFromString(RxString, 4, 2);
+						if ((UserVal & 0x80000000) == 0)
+						{
+							FillI2cMemoryFunction = 1;
+							*byteptr = (uint8_t)UserVal; //record fill data value
+							FunctionDelay = 1000; //value decremented by TIM ISR
+							recognisedstring = FLAG_SET;
+						}
+						else
+						{
+							sprintf(tmpstr, " ERROR!"); //
+							strcat(tempstring, tmpstr);
+						}
+				  }
 
 				  comp = strncmp(RxString, "I2CQ", 4); //I2CQxxxx
 				  if (comp == 0)

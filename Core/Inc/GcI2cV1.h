@@ -2,7 +2,7 @@
  * GcI2cV1.h
  *
  *  Created on: 13 Dec 2022
- *  Last edited 17MAY2024
+ *  Last edited 16JUL2024
  *      Author: Geoff
  */
 
@@ -27,6 +27,11 @@
 
 	struct I2cConfig GetI2cConfig(void);
 
+	uint32_t WriteSeqData(uint8_t* bufferptr, uint8_t quantity, uint16_t destaddress);
+	uint32_t ReadSeqMat(uint8_t index);
+
+	uint32_t ReadSeqHeader(uint8_t* bufferptr);
+	uint32_t UpdateHeaderBlock(uint8_t* bufferptr);
 	uint32_t CheckHeaderBlock(void);
 	uint32_t UpdateSeqHeaderCrc(void);
 
@@ -63,6 +68,7 @@
 	//uint32_t I2cWriteByte(uint16_t IntAddress, uint8_t data);
 	uint32_t I2cWriteByte(uint16_t IntAddress, uint8_t data, uint8_t DebugDisp);
 
+	uint8_t ReadSmallI2CDatablock5(uint8_t device, uint8_t* pI2cData, uint16_t intaddress, uint8_t BlockQty);
 	uint8_t* ReadSmallI2CDatablock4(uint8_t control); //returns a pointer to data block, first first element being a status byte,
 	uint8_t ReadSmallI2CDatablock3(uint16_t intaddress, uint8_t BlockQty, uint8_t debugdata);
 	uint8_t ReadSmallI2CDatablock2(uint8_t debugdata);

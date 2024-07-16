@@ -2,7 +2,7 @@
  * global-settingsV1.h
  *
  *  Created on: 14 Mar 2023
- *  Last edited 30MAR2023
+ *  Last edited 16JUL2024
  *      Author: Geoff
  */
 #include "stm32l4xx_hal.h"
@@ -27,11 +27,17 @@
 
 
 	#define SEQUENCERMEMORY 0xA0
+
 	#define SEQHEADERADDR 0x0020
+	#define SEQHEADERSIZE 0x10
+
 	#define MATTABLEADDR 0X100
+	#define SEQMATENTRYSIZE 8
 
 	#define BLOCKSIZE 0x10
+	#define CMDMAXLENGTH 0x20
 
+	#define FILLVALUE 0x55 //value used to fill spare memory locations (i.e sequencer MAT table)
 
 	struct I2cConfig4{
 		uint16_t I2cInternalAddress;
