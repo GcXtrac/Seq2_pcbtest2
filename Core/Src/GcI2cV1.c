@@ -177,6 +177,7 @@ uint32_t UpdateHeaderBlock(uint8_t* bufferptr)
 uint32_t CheckHeaderBlock(void)
 {
 	//Created 15JUl2024
+	//Last edited 18JUL2024
 	HAL_StatusTypeDef halret;
 	uint32_t error = 0;
 	uint8_t bytebuffer[16] = {0}; //first element holds a status byte, while 16off remaining elements hold data
@@ -239,13 +240,13 @@ uint32_t CheckHeaderBlock(void)
 			uint32_t response = 0;
 			SetCrc16Value(0);
 			//uint16_t CalculateBlockCrc(uint8_t* pInt, uint16_t qty);
-			tempval = CalculateBlockCrc(byteptr+1, 14); //ignore initial element (status byte)
+			tempval = CalculateBlockCrc(byteptr, 14); //ignore initial element (status byte)
 
-			if (*(byteptr + 15) == (uint8_t)(tempval >> 8))
+			if (*(byteptr + 14) == (uint8_t)(tempval >> 8))
 			{
 				error = 4;
 			}
-			if (*(byteptr + 16) != (uint8_t)tempval)
+			if (*(byteptr + 15) != (uint8_t)tempval)
 			{
 				error = 5;
 			}

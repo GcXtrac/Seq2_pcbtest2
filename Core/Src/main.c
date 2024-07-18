@@ -197,7 +197,8 @@ int main(void)
 	uint8_t linecharcount = 0;
 	uint8_t linecount = 0;
 	uint8_t linearray[0x400] = {0};
-	uint8_t dataformat = 1;	//0:text
+	uint8_t dataformat = 1;	//Set X modem data format
+							//0:text
 							//1: intel hex data
 
 	//used for Intel hex data decoding/buffering
@@ -1391,7 +1392,7 @@ int main(void)
 				if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
 				{
 					uint8_t* byteptr;
-					byteptr = ReadSmallI2CDatablock4(1); //read another mall block from memory device
+					byteptr = ReadSmallI2CDatablock4(1); //read another small block from memory device
 					if ((*byteptr & 0xFE) == 0)
 					{
 						if (*(byteptr+3) != 0) //check to see if a number of bytes have been read
@@ -1402,7 +1403,7 @@ int main(void)
 							//strcat(tempstring, tmpstr);
 
 							sprintf(tmpstr, "\e[%d;1H\eK", 10+processloopcount);
-							strcat(tempstring, tmpstr);
+							strcpy(tempstring, tmpstr);
 							sprintf(tmpstr, "0x%04X: 0x%02X 0x%02X  ", (*(byteptr+1)<<8)|(*(byteptr+2)), *(byteptr+3), *byteptr);
 							strcat(tempstring, tmpstr);
 							uint8_t tempqty = *(byteptr+3);
@@ -1431,7 +1432,8 @@ int main(void)
 					}
 					else
 					{
-						sprintf(tmpstr, "\e[7;1H\e[K"); //move cursor to 3rd line, clear text,
+						//sprintf(tmpstr, "\e[7;1H\e[K"); //move cursor to 3rd line, clear text,
+						sprintf(tmpstr, "\e[%d;1H\eK", 10+processloopcount);
 						strcpy(tempstring, tmpstr);
 						sprintf(tmpstr, "I2C data block read reports error: 0x%02X", *byteptr);
 						strcat(tempstring, tmpstr);
@@ -1769,14 +1771,20 @@ int main(void)
 					  {
 						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
 						  strcat(tempstring, tmpstr);
-						  sprintf(tmpstr, " CRC OK"); //reset all attributes
+						  sprintf(tmpstr, "CRC OK"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
 						  strcat(tempstring, tmpstr);
 					  }
 					  else
 					  {
 						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
 						  strcat(tempstring, tmpstr);
-						  sprintf(tmpstr, " CRC FAILED!"); //reset all attributes
+						  sprintf(tmpstr, "CRC FAILED!"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "(error:0x%02X)", tempval); //reset all attributes
 						  strcat(tempstring, tmpstr);
 					  }
 
@@ -1834,7 +1842,7 @@ int main(void)
 					  tempbuffer[12] = 0x00;
 					  tempbuffer[13] = 0x00;
 
-					  //generate CRC for base  memory block
+					  //generate CRC for sequencer header memory block
 					  SetCrc16Value(0);
 					  //uint16_t CalculateBlockCrc(uint8_t* pInt, uint16_t qty);
 					  uint16_t temp = 0;
@@ -1856,27 +1864,73 @@ int main(void)
 						  strcat(tempstring, tmpstr);
 						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 3rd line, clear text,
 						  strcat(tempstring, tmpstr);
-						  sprintf(tmpstr, "(response = 0x%02X)", response); //reset all attributes
+						  sprintf(tmpstr, "(error = 0x%02X)", response); //reset all attributes
 						  strcat(tempstring, tmpstr);
 					  }
 					  else
 					  {
-						  response = UpdateSeqHeaderCrc(); //update header data block held in I2C memory
-						  if (response == 0)
-						  {
+//						  response = UpdateSeqHeaderCrc(); //update header data block held in I2C memory
+//						  if (response == 0)
+//						  {
 							  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
 							  strcat(tempstring, tmpstr);
 							  sprintf(tmpstr, "OK"); //reset all attributes
 							  strcat(tempstring, tmpstr);
-						  }
-						  else
-						  {
-							  sprintf(tmpstr, "Header update failed"); //reset all attributes
+							  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 3rd line, clear text,
 							  strcat(tempstring, tmpstr);
-						  }
+//						  }
+//						  else
+//						  {
+//							  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
+//							  strcat(tempstring, tmpstr);
+//							  sprintf(tmpstr, "Header update failed"); //reset all attributes
+//							  strcat(tempstring, tmpstr);
+//						  }
 					  }
 
 				  }
+
+				  comp = strcmp(RxString, "XF");
+				  if (comp == 0)
+				  {
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, "Set X-modem input data format");
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  dataformat = 99;
+					  recognisedstring = FLAG_SET;
+					  if (RxString[2] == '0')
+					  {
+						  //basic text input
+						  dataformat = 0;
+
+					  }
+					  if (RxString[2] == '1')
+					  {
+						  //Intel hex input
+						  dataformat = 1;
+
+					  }
+					  if (RxString[2] == '2')
+					  {
+						  //Intel hex input
+						  dataformat = 2;
+
+					  }
+
+					  if (dataformat != 0)
+					  {
+						  sprintf(tmpstr, "\e[4;1H\e[KData format: 0x%02X", dataformat); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+					  }
+					  else
+					  {
+						  sprintf(tmpstr, "\e[4;1H\e[KUnrecognised format!"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+					  }
+				  }
+
 			  }
 
 			  if (commandlength == 4)
