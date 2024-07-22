@@ -119,8 +119,9 @@ uint32_t ReadSeqMat(uint8_t index)
 
 uint32_t ReadSeqHeader(uint8_t* bufferptr)
 {
-	//Read 8 byte Sequencer header data from I2C memory & check CRC value
+	//Read 16 byte Sequencer header data from I2C memory & check CRC value
 	//Created 16JUL2024
+	//Last edited 22JUL2024
 	uint8_t response = 0;
 	//uint8_t ReadSmallI2CDatablock5(uint8_t device, uint8_t* pI2cData, uint16_t intaddress, uint8_t BlockQty)
 	response = ReadSmallI2CDatablock5(SEQUENCERMEMORY, bufferptr, SEQHEADERADDR, SEQHEADERSIZE); //read a copy of the specified MAT entry
@@ -177,7 +178,7 @@ uint32_t UpdateHeaderBlock(uint8_t* bufferptr)
 uint32_t CheckHeaderBlock(void)
 {
 	//Created 15JUl2024
-	//Last edited 18JUL2024
+	//Last edited 22JUL2024
 	HAL_StatusTypeDef halret;
 	uint32_t error = 0;
 	uint8_t bytebuffer[16] = {0}; //first element holds a status byte, while 16off remaining elements hold data
@@ -238,11 +239,11 @@ uint32_t CheckHeaderBlock(void)
 			//Calculate CRC value
 			uint16_t tempval = 0;
 			uint32_t response = 0;
-			SetCrc16Value(0);
+			//SetCrc16Value(0);
 			//uint16_t CalculateBlockCrc(uint8_t* pInt, uint16_t qty);
 			tempval = CalculateBlockCrc(byteptr, 14); //ignore initial element (status byte)
 
-			if (*(byteptr + 14) == (uint8_t)(tempval >> 8))
+			if (*(byteptr + 14) != (uint8_t)(tempval >> 8))
 			{
 				error = 4;
 			}

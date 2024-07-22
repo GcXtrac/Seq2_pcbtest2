@@ -27,6 +27,7 @@
 #include "GcI2cV1.h"
 #include "GcFunctionsV1.h"
 #include "DataIntegrityV1.h"
+#include "SequencerV1.h"
 
 /* USER CODE END Includes */
 
@@ -218,6 +219,10 @@ int main(void)
 								//0x11 received sequencer index specifies data that already exists
 								//0x20 problem storing sequencer command string.
 
+
+	 uint16_t SeqStepIndex = 0;
+	 uint16_t MaxSequencerCycles = 0;
+
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -379,6 +384,27 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+
+	  if (GetSequencerState() == 1)
+	  {
+		  if (GetSeqBufferFillLevel() != SEQSTEPBUFFERELEMENTS)
+		  {
+			  //Load sequencer buffer
+			  //Sequencer process won't run until the buffer contains data
+			  SeqBufferLoadEntry();
+
+		  }
+
+
+
+		  if (GetSeqBufferFillLevel() != 0)
+		  {
+			  //at least one entry exists within the sequencer buffer memory
+			  //sequencer process start...
+			  //decode the first entry in the buffer memory, set ioutputs and start step timer
+		  }
+	  }
+
 
 	  if (XmodemStatus != 0)
 	  {
@@ -1982,6 +2008,112 @@ int main(void)
 					  strcat(tempstring, "I2C Read block");
 					  sprintf(tmpstr, "\e[0m"); //reset all attributes
 					  strcat(tempstring, tmpstr);
+
+					  recognisedstring = FLAG_SET;
+					  I2cReadBlockFunction = 1;
+					  screenblock = FLAG_SET; //prevent other main loop processed overwriting the screen
+				  }
+
+
+				  comp = strcmp(RxString, "SEQ");
+				  if (comp == 0)
+				  {
+					  if (RxString[3] == '0')
+					  {
+						  //Stop sequencer process
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Sequencer Stopped");
+						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
+
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+						  recognisedstring = FLAG_SET;
+
+						  SetSequencerState(0);
+					  }
+
+
+					  if (RxString[3] == '1')
+					  {
+						  //Start sequencer process
+						  //sprintf(tmpstr, "\e[3;1H\e[K\e[1;37;42m"); //move cursor to 3rd line, clear text, white text on green background
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Sequencer Started");
+						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
+
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+						  recognisedstring = FLAG_SET;
+						  //load sequencer buffer memory
+
+						  //check header
+						  recognisedstring = FLAG_SET;
+
+
+						  uint32_t tempval = 0;
+						  //tempval = CheckHeaderBlock();
+						  tempval = ReadSeqHeader(byteptr);
+						  if (tempval == 0)
+						  {
+							  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+							  strcat(tempstring, tmpstr);
+							  //sprintf(tmpstr, "CRC OK"); //reset all attributes
+							  //strcat(tempstring, tmpstr);
+
+
+							  //read max steps
+							  uint16_t MaxSequencerSteps = (uint16_t)(*byteptr) << 8 | (uint16_t)(*(byteptr+1));
+							  SetSequencerMaxSteps(MaxSequencerSteps);
+
+							  sprintf(tmpstr, "Max steps:5d", MaxSequencerSteps); //reset all attributes
+							  strcat(tempstring, tmpstr);
+							  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
+							  strcat(tempstring, tmpstr);
+
+							  MaxSequencerCycles = (uint16_t)(*(byteptr + 6)) << 8 | (uint16_t)(*(byteptr+7));
+							  sprintf(tmpstr, "Max cycles:5d"); //reset all attributes
+							  strcat(tempstring, tmpstr);
+							  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
+							  strcat(tempstring, tmpstr);
+
+							  SeqStepIndex = 0;
+
+
+							  InitialiseSequencerDataBuffer(); //reset sequencer buffer
+
+							  SetSequencerState(1);
+
+						  }
+						  else
+						  {
+							  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+							  strcat(tempstring, tmpstr);
+							  sprintf(tmpstr, "CRC FAILED!"); //reset all attributes
+							  strcat(tempstring, tmpstr);
+							  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
+							  strcat(tempstring, tmpstr);
+							  sprintf(tmpstr, "(error:0x%02X)", tempval); //reset all attributes
+							  strcat(tempstring, tmpstr);
+
+							  SetSequencerState(0);
+						  }
+
+
+
+
+
+
+
+					  }
+
 
 					  recognisedstring = FLAG_SET;
 					  I2cReadBlockFunction = 1;

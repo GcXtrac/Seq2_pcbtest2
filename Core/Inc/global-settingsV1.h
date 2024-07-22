@@ -5,10 +5,11 @@
  *  Last edited 16JUL2024
  *      Author: Geoff
  */
-#include "stm32l4xx_hal.h"
+
 #ifndef INC_GLOBAL_SETTINGSV1_H_ //guard
 	#define INC_GLOBAL_SETTINGSV1_H_
 
+    #include "stm32l4xx_hal.h"
 
 	//added 14MAR2023
 	#define TimIsrSeqStepUpdate //if defined, the timer ISR is responsible for loading the next step data and updating output(s)
