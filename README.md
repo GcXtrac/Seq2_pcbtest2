@@ -1,4 +1,5 @@
 # Seq2_pcbtest2
+V0.0.1
 
 code development for the dedicated PCB for the MK2 sequencer (STM32L476VCT6 device)
 Serial output used VT100 strings to format the display
