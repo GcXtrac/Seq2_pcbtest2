@@ -95,7 +95,16 @@ void Error_Handler(void);
 #define MODE2_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
-
+enum SeqDecode {
+				NONE = 0,
+				STEP = 1,
+				TIME = 2,
+				DIGITALOUT = 3,
+				ANALOGOUT = 4,
+				SEQHEADER = 5,
+				SEQCYCLECOUNT = 6,
+				COMMENT = 7,
+			};
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

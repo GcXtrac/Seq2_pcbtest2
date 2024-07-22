@@ -108,6 +108,13 @@ uint16_t DacVal = 0;
 static uint16_t timer1count = TIMER1PERIOD;
 uint8_t mainloopcount = 0;
 
+volatile static uint8_t CanAnalogScanState = 0;
+volatile static uint16_t ScanUpdatetimeRefreshValue = 200;
+volatile static uint16_t ScanUpdateTime = 0;
+volatile static uint16_t ScanValue = 0;
+
+volatile static uint8_t UpdateScreen = 0;
+
 //CAN Rx
 CAN_RxHeaderTypeDef CanRxHeader = {};
 CAN_RxHeaderTypeDef * pCanRxHeader = &CanRxHeader;
@@ -138,19 +145,6 @@ static void MX_I2C2_Init(void);
   * @brief  The application entry point.
   * @retval int
   */
-
-enum SeqDecode {
-				NONE = 0,
-				STEP = 1,
-				TIME = 2,
-				DIGITALOUT = 3,
-				ANALOGOUT = 4,
-				SEQHEADER = 5,
-				SEQCYCLECOUNT = 6,
-				COMMENT = 7,
-			};
-
-
 int main(void)
 {
   /* USER CODE BEGIN 1 */
@@ -222,6 +216,15 @@ int main(void)
 
 	 uint16_t SeqStepIndex = 0;
 	 uint16_t MaxSequencerCycles = 0;
+
+
+
+
+
+	 uint8_t Timer1AnalogHeartbeat = 1;
+	 uint16_t ScanMsgCount = 0;
+
+
 
   /* USER CODE END 1 */
 
@@ -384,6 +387,106 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+
+	  if (CanAnalogScanState != 0) //function controlled by serial command "CASy"
+	  {
+		  //scan CAN and analogue signals together
+		  if ((CanAnalogScanState & 0x02) != 0)
+		  {
+			  //copy scan value to both CAN message and analogue outputs
+			  CanAnalogScanState = CanAnalogScanState & 0xFD; //reset output update bit
+
+
+
+
+
+			  HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_1, DAC_ALIGN_12B_R, (uint32_t)ScanValue);
+
+
+			  uint32_t x = 0;
+			  uint8_t CanTxError = 0;
+			  x = HAL_CAN_GetTxMailboxesFreeLevel(&hcan1);
+			  if (x != 0)
+			  {
+				  uint8_t datapayload[8] = {0};
+
+				  datapayload[0] = (uint8_t)(ScanValue >> 8);
+				  datapayload[1] = (uint8_t)(ScanValue);
+
+				  datapayload[4] = (uint8_t)(ScanMsgCount>> 8);
+				  datapayload[5] = (uint8_t)ScanMsgCount;
+				  ScanMsgCount++;
+
+				  //uint32_t Txmailbox = CAN_TX_MAILBOX0;
+				  uint32_t Txmailbox = 0xff;
+				  //uint32_t* pTxmailbox = Txmailbox;
+
+				  if (HAL_CAN_AddTxMessage(&hcan1, pCanTxHeader, datapayload, &Txmailbox) != HAL_OK)
+				  {
+					  //there is a problem with sending a CAN message...
+					  CanTxError = 1;
+				  }
+				  else
+				  {
+					  ScanMsgCount++;
+				  }
+				  CanTxMailboxfullmsg = FLAG_CLEAR; //allow TX mailbox full message to be displayed if the mailbox becomes full again!
+
+			  }
+			  else
+			  {
+
+			  }
+			  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+			  {
+				  if (UpdateScreen != 0)
+				  {
+					  UpdateScreen = 0; //reset flag.
+
+					  sprintf(tempstring, "\e[4;1Scan value %4d", ScanValue);
+
+					  if (x != 0)
+					  {
+						  if(CanTxError != 0)
+						  {
+							  sprintf(tmpstr, "\e[5;1H\e[KCAN error detected");
+							  strcat(tempstring, tmpstr);
+						  }
+						  else
+						  {
+							sprintf(tmpstr, "\e[5;1H\e[KCAN message count:%d", ScanMsgCount);
+							strcat(tempstring, tmpstr);
+						  }
+					  }
+					  else
+					  {
+						  if (CanTxMailboxfullmsg == FLAG_CLEAR)
+						  {
+							  if (screenblock == FLAG_CLEAR)
+							  {
+								  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+								  {
+									  sprintf(tempstring, "\e[6;1HCAN TX mailboxes FULL!");
+									  uint16_t stringlength = strlen(tempstring);
+									  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+									  //HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+									  //UartMsgSent = FLAG_SET;
+									  CanTxMailboxfullmsg = FLAG_SET;
+								  }
+							  }
+						  }
+					  }
+
+					  uint16_t stringlength = strlen(tempstring);
+					  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+					  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+					  UartMsgSent = FLAG_SET;
+
+				  }
+			  }
+
+		  }
+	  }
 
 	  if (GetSequencerState() == 1)
 	  {
@@ -1575,24 +1678,26 @@ int main(void)
 
 
 
-
-	  if (timer1heartbeat2 == FLAG_SET)
+	  if (Timer1AnalogHeartbeat != 0)
 	  {
-		  timer1heartbeat2 = FLAG_CLEAR;
-		  //Set DAC output
-		  HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_1, DAC_ALIGN_12B_R, (uint32_t)DacVal);
-		  HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_2, DAC_ALIGN_12B_R, (uint32_t)DacVal2);
-
-		  DacVal++;
-		  if (DacVal > 0xFFF)
+		  if (timer1heartbeat2 == FLAG_SET)
 		  {
-			  DacVal = 0;
-		  }
+			  timer1heartbeat2 = FLAG_CLEAR;
+			  //Set DAC output
+			  HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_1, DAC_ALIGN_12B_R, (uint32_t)DacVal);
+			  HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_2, DAC_ALIGN_12B_R, (uint32_t)DacVal2);
 
-		  DacVal2--;
-		  if (DacVal2 > 0xFFF)
-		  {
-			  DacVal2 = 0xFFF;
+			  DacVal++;
+			  if (DacVal > 0xFFF)
+			  {
+				  DacVal = 0;
+			  }
+
+			  DacVal2--;
+			  if (DacVal2 > 0xFFF)
+			  {
+				  DacVal2 = 0xFFF;
+			  }
 		  }
 	  }
 
@@ -1916,7 +2021,7 @@ int main(void)
 
 				  }
 
-				  comp = strcmp(RxString, "XF");
+				  comp = strcmp(RxString, "XF"); //"XFy" set X-modem received data format
 				  if (comp == 0)
 				  {
 					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
@@ -1961,6 +2066,35 @@ int main(void)
 
 			  if (commandlength == 4)
 			  {
+				  comp = strcmp(RxString, "CAS"); //"CASy": CAN Analogue scan
+				  if (comp == 0)
+				  {
+					  if (RxString[3] == '0')
+					  {
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "CAN Analog Scan function disabled");
+						  CanAnalogScanState = 0; //flag to main loop
+						  recognisedstring = FLAG_SET;
+					  }
+
+					  else if (RxString[3] == '1')
+					  {
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "CAN Analog Scan");
+
+						  CanAnalogScanState = 1; //flag to main loop
+						  ScanValue = 0;
+						  ScanUpdatetimeRefreshValue = 1;
+						  ScanUpdateTime = ScanUpdatetimeRefreshValue;
+						  Timer1AnalogHeartbeat = 0;
+						  ScanMsgCount = 0;
+						  screenblock = FLAG_CLEAR;
+						  recognisedstring = FLAG_SET;
+					  }
+				  }
+
 				  comp = strcmp(RxString, "I2C?");
 				  if (comp == 0)
 				  {
@@ -2897,13 +3031,6 @@ static void MX_DAC1_Init(void)
   {
     Error_Handler();
   }
-
-  /** DAC channel OUT2 config
-  */
-  if (HAL_DAC_ConfigChannel(&hdac1, &sConfig, DAC_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
   /* USER CODE BEGIN DAC1_Init 2 */
 
   /* USER CODE END DAC1_Init 2 */
@@ -3179,6 +3306,21 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		//static uint16_t timer1count = TIMER1PERIOD;
 		static uint16_t DacUpdatecount = TIMER1DACUPDATECOUNT;
 		static uint16_t UartUpdateCount = UARTUPDATEPERIOD;
+
+		if (CanAnalogScanState != 0)
+		{
+
+			ScanUpdateTime--;
+			if (ScanUpdateTime == 0)
+			{
+				ScanUpdateTime = ScanUpdatetimeRefreshValue; //update step time
+				CanAnalogScanState = CanAnalogScanState | 0x02; //flag to main loop
+				UpdateScreen = 1;
+
+			}
+			ScanValue++;
+
+		}
 
 		if (FunctionDelay != 0)
 		{
