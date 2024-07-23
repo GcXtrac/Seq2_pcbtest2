@@ -22,4 +22,6 @@ XFy: 		Set X-modem received data format
 		y=1: expect Intel hex data
 		y=2: expect Sequencer specific data
 CSM: 		Clear sequencer memory
+CSA:		CAN Analog sweep output
+		Sweeps CAN signal together with analogue signal for datalogger debugging
 XR:		Enable X-modem receive function
