@@ -10,7 +10,13 @@
 #include "GcI2cV1.h"
 #include "DataIntegrityV1.h"
 
-
+//enum Sequencerstate
+//{
+//	DISABLED = 0,
+//	ENABLED = 1,
+//	STEPTIMERUNNING = 2,
+//	NEXTSTEPSETUP = 3,
+//};
 
 //there is an issue if the following structures are placed in the *.h file???
 struct SeqStepData{
@@ -28,9 +34,12 @@ struct Sequencer_Data{
 	uint16_t readptr;
 	uint16_t writeptr;
 	uint16_t fillcount;
-	uint16_t SequenceStep;
+	uint16_t NextSequenceSteptoBuffer;
 	uint16_t MaxSteps;
-	uint8_t State;
+	uint16_t CurrentSequenceStep;
+	//uint8_t State;
+	//enum Sequencerstate state; //enumeration value within a data structure???
+	enum Sequencerstate {DISABLED = 0, ENABLED = 1, STEPTIMERUNNING = 2, NEXTSTEPSETUP = 3} state;
 }SequencerData;
 
 
@@ -38,25 +47,36 @@ struct Sequencer_Data{
 void SetSequencerState (uint8_t state)
 {
 	//Created 22JUL2024
-	SequencerData.State = state;
+	SequencerData.state = state;
 }
 
 uint8_t GetSequencerState(void)
 {
 	//Created 22JUL2024
-	return SequencerData.State;
+	return SequencerData.state;
 }
 
 
 void InitialiseSequencerDataBuffer(void)
 {
 	//Created 22JUL2024
+	//Last edited 23JUL2024
 	SequencerData.readptr = 0;
 	SequencerData.writeptr = 0;
 	SequencerData.fillcount = 0;
-	SequencerData.SequenceStep = 0;
-	SequencerData.State = 0;
+	SequencerData.NextSequenceSteptoBuffer = 0;
+	SequencerData.state = DISABLED;
 	SequencerData.MaxSteps = 0;
+	SequencerData.CurrentSequenceStep = 0;
+}
+
+
+uint16_t GetSeqStepTime(void)
+{
+	//Created 23JUL2024
+	uint16_t tempval = 0;
+	tempval = SequencerData.SeqStepDataArray[SequencerData.readptr].time;
+	return tempval;
 }
 
 
@@ -111,7 +131,7 @@ uint16_t SeqBufferLoadEntry(void)
 		uint8_t Quantity = 8;
 		//uint8_t ReadSmallI2CDatablock5(uint8_t device, uint8_t* pI2cData, uint16_t intaddress, uint8_t BlockQty);
 		uint8_t response = 0;
-		response = ReadSmallI2CDatablock5(SEQUENCERMEMORY, byteptr, MatAddress + (SequencerData.SequenceStep), Quantity);
+		response = ReadSmallI2CDatablock5(SEQUENCERMEMORY, byteptr, MatAddress + (SequencerData.NextSequenceSteptoBuffer), Quantity);
 		if (response == 0)
 		{
 			//now check MAT entry CRC value
@@ -155,10 +175,10 @@ uint16_t SeqBufferLoadEntry(void)
 										SequencerData.writeptr = 0;
 									}
 
-									SequencerData.SequenceStep++;
-									if(SequencerData.SequenceStep > SequencerData.MaxSteps)
+									SequencerData.NextSequenceSteptoBuffer++;
+									if(SequencerData.NextSequenceSteptoBuffer > SequencerData.MaxSteps)
 									{
-										SequencerData.SequenceStep = 0;
+										SequencerData.NextSequenceSteptoBuffer = 0;
 									}
 									SequencerData.fillcount++;
 
@@ -201,7 +221,7 @@ uint16_t SeqBufferLoadEntry(void)
 	if (tempval != 0)
 	{
 		//could not read header data
-		SequencerData.State = 0;
+		SequencerData.state = 0;
 	}
 	return tempval;
 }

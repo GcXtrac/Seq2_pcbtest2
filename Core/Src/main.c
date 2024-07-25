@@ -115,6 +115,8 @@ volatile static uint16_t ScanValue = 0;
 
 volatile static uint8_t UpdateScreen = 0;
 
+volatile static uint16_t SeqStepTime = 0;
+
 //CAN Rx
 CAN_RxHeaderTypeDef CanRxHeader = {};
 CAN_RxHeaderTypeDef * pCanRxHeader = &CanRxHeader;
@@ -206,6 +208,7 @@ int main(void)
 
 	uint8_t FillI2cMemoryFunction = 0; //Main loop function controlling variable
 	uint16_t blockcount = 0;
+	uint16_t readdata = 0;
 
 	uint16_t StepIndex = 0;
 	uint16_t SeqCmdError = 0;
@@ -214,7 +217,6 @@ int main(void)
 								//0x20 problem storing sequencer command string.
 
 
-	 uint16_t SeqStepIndex = 0;
 	 uint16_t MaxSequencerCycles = 0;
 
 
@@ -467,7 +469,7 @@ int main(void)
 								  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
 								  {
 									  sprintf(tempstring, "\e[6;1HCAN TX mailboxes FULL!");
-									  uint16_t stringlength = strlen(tempstring);
+									  //uint16_t stringlength = strlen(tempstring);
 									  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
 									  //HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
 									  //UartMsgSent = FLAG_SET;
@@ -488,7 +490,7 @@ int main(void)
 		  }
 	  }
 
-	  if (GetSequencerState() == 1)
+	  if (GetSequencerState() != 0)
 	  {
 		  if (GetSeqBufferFillLevel() != SEQSTEPBUFFERELEMENTS)
 		  {
@@ -504,7 +506,9 @@ int main(void)
 		  {
 			  //at least one entry exists within the sequencer buffer memory
 			  //sequencer process start...
-			  //decode the first entry in the buffer memory, set ioutputs and start step timer
+			  //decode the first entry in the buffer memory, set outputs and start step timer
+			  SeqStepTime = GetSeqStepTime();
+			  SetSequencerState(STEPTIMERUNNING);
 		  }
 	  }
 
@@ -891,7 +895,7 @@ int main(void)
 										commanddata[cmddatacounter + 1] = (uint8_t)(tempval >> 8);
 										commanddata[cmddatacounter + 2] = (uint8_t)tempval;
 
-										response = WriteSeqData(&commanddata, cmddatacounter + 2, address);
+										response = WriteSeqData(commanddata, cmddatacounter + 2, address);
 
 									}
 									if (response == 0)
@@ -906,7 +910,7 @@ int main(void)
 
 										SetCrc16Value(0);
 										uint16_t tempval = 0;
-										tempval = CalculateBlockCrc(*byteptr, SEQMATENTRYSIZE-2);
+										tempval = CalculateBlockCrc(byteptr, SEQMATENTRYSIZE-2);
 										*(byteptr+6) = (uint8_t)(tempval >> 8);
 										*(byteptr+7) = (uint8_t)tempval;
 
@@ -1257,7 +1261,7 @@ int main(void)
 
 	  if (FillI2cMemoryFunction != 0)
 	  {
-			//main loop function initiated by serial command "FILLxx"
+			//main loop function initiated by serial command "I2CFxx"
 			switch(FillI2cMemoryFunction)
 			{
 				case(1):
@@ -1284,6 +1288,8 @@ int main(void)
 							FunctionDelay = 1000; //value decremented by TIM ISR
 							FillI2cMemoryFunction = 2;
 							address = 0;
+							blockcount = 0;
+							readdata = 0;
 						}
 					}
 					break;
@@ -1295,8 +1301,12 @@ int main(void)
 						{
 							if (tempstruct.I2cQuantity != 0)
 							{
+								uint32_t response = 0;
 								uint8_t currentblock = 0;
-								if(tempstruct.I2cQuantity > BLOCKSIZE)
+								uint16_t stringlength = 0;
+
+								uint16_t reminingdataqty = tempstruct.I2cQuantity - readdata;
+								if(reminingdataqty > BLOCKSIZE)
 								{
 									currentblock = BLOCKSIZE;
 								}
@@ -1307,15 +1317,18 @@ int main(void)
 								blockcount++;
 
 								for (uint8_t i = 0; i<BLOCKSIZE-1; i++)
+								{
 									*(byteptr + 1 + i) = *byteptr;
+								}
 
-								uint32_t response = 0;
+
 								//uint32_t I2cWriteBlock(uint8_t DeviceAddress, uint16_t InternalAddress, uint8_t InternalAddressWidth, uint8_t* srcdata, uint8_t qty);
 								response = I2cWriteBlock(SEQUENCERMEMORY, address, 2, byteptr, currentblock);
 								if (response == 0)
 								{
 									address = address + currentblock;
-									if (address == tempstruct.I2cQuantity)
+									readdata = readdata + currentblock;
+									if (readdata >= tempstruct.I2cQuantity)
 									{
 										//block fill is complete
 										FillI2cMemoryFunction = 3;
@@ -1323,10 +1336,10 @@ int main(void)
 									else
 									{
 										//continue around this loop until the specified block has been filled
-										sprintf(tmpstr, "\e[7;1H\e[KBlock count:0x%02X", blockcount);
+										sprintf(tmpstr, "\e[8;1H\e[KBlock count:0x%02X", blockcount);
 										strcpy(tempstring, tmpstr);
 
-										uint16_t stringlength = strlen(tempstring);
+										stringlength = strlen(tempstring);
 										//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
 										HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
 										UartMsgSent = FLAG_SET;
@@ -1339,10 +1352,10 @@ int main(void)
 							}
 							else
 							{
-								sprintf(tmpstr, "\e[6;1H\e[KQuantity:0x%04X", tempstruct.I2cQuantity);
+								sprintf(tmpstr, "\e[8;1H\e[KNo Data specified! (Quantity:0x%04X)", tempstruct.I2cQuantity);
 								strcpy(tempstring, tmpstr);
 
-								uint16_t stringlength = strlen(tempstring);
+								stringlength = strlen(tempstring);
 								//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
 								HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
 								UartMsgSent = FLAG_SET;
@@ -1915,7 +1928,7 @@ int main(void)
 						  strcat(tempstring, tmpstr);
 						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
 						  strcat(tempstring, tmpstr);
-						  sprintf(tmpstr, "(error:0x%02X)", tempval); //reset all attributes
+						  sprintf(tmpstr, "(error:0x%02lX)", tempval); //reset all attributes
 						  strcat(tempstring, tmpstr);
 					  }
 
@@ -1995,7 +2008,7 @@ int main(void)
 						  strcat(tempstring, tmpstr);
 						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 3rd line, clear text,
 						  strcat(tempstring, tmpstr);
-						  sprintf(tmpstr, "(error = 0x%02X)", response); //reset all attributes
+						  sprintf(tmpstr, "(error = 0x%02lX)", response); //reset all attributes
 						  strcat(tempstring, tmpstr);
 					  }
 					  else
@@ -2021,7 +2034,8 @@ int main(void)
 
 				  }
 
-				  comp = strcmp(RxString, "XF"); //"XFy" set X-modem received data format
+				  //comp = strcmp(RxString, "XF"); //"XFy" set X-modem received data format
+				  comp = strncmp(RxString, "XF", 2); //"XFy" set X-modem received data format
 				  if (comp == 0)
 				  {
 					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
@@ -2050,7 +2064,7 @@ int main(void)
 
 					  }
 
-					  if (dataformat != 0)
+					  if (dataformat != 99)
 					  {
 						  sprintf(tmpstr, "\e[4;1H\e[KData format: 0x%02X", dataformat); //move cursor to 3rd line, clear text,
 						  strcpy(tempstring, tmpstr);
@@ -2066,7 +2080,8 @@ int main(void)
 
 			  if (commandlength == 4)
 			  {
-				  comp = strcmp(RxString, "CAS"); //"CASy": CAN Analogue scan
+				  //comp = strcmp(RxString, "CAS"); //"CASy": CAN Analogue scan
+				  comp = strncmp(RxString, "CAS", 3); //"CASy": CAN Analogue scan
 				  if (comp == 0)
 				  {
 					  if (RxString[3] == '0')
@@ -2149,7 +2164,7 @@ int main(void)
 				  }
 
 
-				  comp = strcmp(RxString, "SEQ");
+				  comp = strncmp(RxString, "SEQ", 3);
 				  if (comp == 0)
 				  {
 					  if (RxString[3] == '0')
@@ -2218,8 +2233,6 @@ int main(void)
 							  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
 							  strcat(tempstring, tmpstr);
 
-							  SeqStepIndex = 0;
-
 
 							  InitialiseSequencerDataBuffer(); //reset sequencer buffer
 
@@ -2234,7 +2247,7 @@ int main(void)
 							  strcat(tempstring, tmpstr);
 							  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
 							  strcat(tempstring, tmpstr);
-							  sprintf(tmpstr, "(error:0x%02X)", tempval); //reset all attributes
+							  sprintf(tmpstr, "(error:0x%02lX)", tempval); //reset all attributes
 							  strcat(tempstring, tmpstr);
 
 							  SetSequencerState(0);
@@ -2297,12 +2310,9 @@ int main(void)
 			  if (commandlength == 6)
 			  {
 
-
-
 				  comp = strncmp(RxString, "I2CD", 4); //I2CDxx
 				  if (comp == 0)
 				  {
-
 
 						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 						strcpy(tempstring, tmpstr);
@@ -2352,6 +2362,45 @@ int main(void)
 						recognisedstring = FLAG_SET;
 
 				  }
+
+				  comp = strncmp(RxString, "I2CF", 4); //I2CFxx
+				  if (comp == 0)
+				  {
+
+					  	//Fill block of I2C memory
+						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						strcat(tempstring, "Fill I2C memory: ");
+						sprintf(tmpstr, "\e[4;1H\e[K"); //clear line
+						strcpy(tempstring, tmpstr);
+						sprintf(tmpstr, "\e[5;1H\e[K"); //
+						strcpy(tempstring, tmpstr);
+						sprintf(tmpstr, "\e[6;1H\e[K"); //
+						strcpy(tempstring, tmpstr);
+						sprintf(tmpstr, "\e[7;1H\e[K"); //
+						strcpy(tempstring, tmpstr);
+						sprintf(tmpstr, "\e[8;1H\e[K"); //
+						strcpy(tempstring, tmpstr);
+
+						char valstring[10] = "";
+						strncpy(valstring, &RxString[4], 2); //obtain value characters
+
+						//set I2C device address
+						UserVal = ExtractValueFromString(RxString, 4, 2);
+						if ((UserVal & 0x80000000) == 0)
+						{
+							FillI2cMemoryFunction = 1;
+							*byteptr = (uint8_t)UserVal; //record fill data value
+							FunctionDelay = 1000; //value decremented by TIM ISR
+							recognisedstring = FLAG_SET;
+						}
+						else
+						{
+							sprintf(tmpstr, " ERROR!"); //
+							strcat(tempstring, tmpstr);
+						}
+				  }
+
 			  }
 
 			  if (commandlength == 8)
@@ -2395,35 +2444,7 @@ int main(void)
 
 				  }
 
-				  comp = strncmp(RxString, "I2CF", 4); //I2CFxx
-				  if (comp == 0)
-				  {
 
-					  	//Fill block of I2C memory
-						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
-						strcpy(tempstring, tmpstr);
-						strcat(tempstring, "Fill I2C memory: ");
-						sprintf(tmpstr, "\e[4;1H\e[K"); //
-						strcpy(tempstring, tmpstr);
-
-						char valstring[10] = "";
-						strncpy(valstring, &RxString[4], 2); //obtain value characters
-
-						//set I2C device address
-						UserVal = ExtractValueFromString(RxString, 4, 2);
-						if ((UserVal & 0x80000000) == 0)
-						{
-							FillI2cMemoryFunction = 1;
-							*byteptr = (uint8_t)UserVal; //record fill data value
-							FunctionDelay = 1000; //value decremented by TIM ISR
-							recognisedstring = FLAG_SET;
-						}
-						else
-						{
-							sprintf(tmpstr, " ERROR!"); //
-							strcat(tempstring, tmpstr);
-						}
-				  }
 
 				  comp = strncmp(RxString, "I2CQ", 4); //I2CQxxxx
 				  if (comp == 0)
@@ -3320,6 +3341,17 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			}
 			ScanValue++;
 
+		}
+
+		if (GetSequencerState() != 0) //check to see is sequencer has been enabled
+		{
+			//Sequencer function is enabled
+			SeqStepTime--;
+			if (SeqStepTime == 0)
+			{
+				//indicate to main loop that new sequence step is to be started
+				SetSequencerState(NEXTSTEPSETUP);
+			}
 		}
 
 		if (FunctionDelay != 0)

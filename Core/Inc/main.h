@@ -105,6 +105,15 @@ enum SeqDecode {
 				SEQCYCLECOUNT = 6,
 				COMMENT = 7,
 			};
+
+enum Sequencerstate
+{
+	DISABLED = 0,
+	ENABLED = 1,
+	STEPTIMERUNNING = 2,
+	NEXTSTEPSETUP = 3,
+};
+
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

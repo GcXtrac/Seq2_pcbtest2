@@ -15,6 +15,7 @@
 	void SetSequencerState (uint8_t state);
 	uint8_t GetSequencerState(void);
 	void InitialiseSequencerDataBuffer(void);
+	uint16_t GetSeqStepTime(void);
 	uint16_t GetSeqBufferFillLevel(void);
 	void SetSequencerMaxSteps(uint16_t MaxSteps);
 	uint16_t SeqBufferReadEntry(void);
