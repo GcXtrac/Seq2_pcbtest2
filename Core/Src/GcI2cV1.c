@@ -1134,13 +1134,18 @@ uint32_t I2cWriteBlock(uint8_t DeviceAddress, uint16_t InternalAddress, uint8_t 
 	//Function designed to write a block of data to an I2C memory device
 	//Used by serial commnand "XR" for testing
 	//Created 7FEB2022
-	//Last edited 10JUL2024
+	//Last edited 25JUL2024
 	//Input values:
 	//	DeviceAddress holds the I2C device address
 	//	InternalAddress holds the I2C internal memory address
 	//	InternalAddressWidth defines number of bytes used to hold internal address (1/2)
 	//	srcdata is a pointer to an array of byte data
 	//	qty defines quantity of data to be written
+	//returns:
+	//	0x01: Device is busy
+	//	0x02: problem during data write function
+	//	0x03: data write timeout expired
+
 	HAL_StatusTypeDef halret;
 	char msg[100] = {};
 
@@ -1168,7 +1173,6 @@ uint32_t I2cWriteBlock(uint8_t DeviceAddress, uint16_t InternalAddress, uint8_t 
 		//HAL_StatusTypeDef y;
 		//prepare to write a single byte to the I2C device
 		halret = HAL_I2C_Mem_Write_IT(&hi2c2, DeviceAddress, InternalAddress, (uint16_t)InternalAddressWidth, srcdata, (uint16_t)qty);
-
 		if (halret == HAL_OK)
 		{
 

@@ -209,6 +209,7 @@ int main(void)
 	uint8_t FillI2cMemoryFunction = 0; //Main loop function controlling variable
 	uint16_t blockcount = 0;
 	uint16_t readdata = 0;
+	uint8_t attemptcount = 0;
 
 	uint16_t StepIndex = 0;
 	uint16_t SeqCmdError = 0;
@@ -1290,6 +1291,7 @@ int main(void)
 							address = 0;
 							blockcount = 0;
 							readdata = 0;
+							attemptcount = 0;
 						}
 					}
 					break;
@@ -1312,7 +1314,7 @@ int main(void)
 								}
 								else
 								{
-									currentblock = tempstruct.I2cQuantity;
+									currentblock = reminingdataqty;
 								}
 								blockcount++;
 
@@ -1324,6 +1326,23 @@ int main(void)
 
 								//uint32_t I2cWriteBlock(uint8_t DeviceAddress, uint16_t InternalAddress, uint8_t InternalAddressWidth, uint8_t* srcdata, uint8_t qty);
 								response = I2cWriteBlock(SEQUENCERMEMORY, address, 2, byteptr, currentblock);
+
+								//need to check her for device busy as device might still be writing the last block of data....
+
+								if (response == 1)
+								{
+									//I2C device was busy, prepare to try again...
+									attemptcount++;
+									if (attemptcount > 100)
+									{
+										FillI2cMemoryFunction = 4;
+									}
+									else
+									{
+										FunctionDelay = 10;
+									}
+								}
+
 								if (response == 0)
 								{
 									address = address + currentblock;
@@ -1336,7 +1355,7 @@ int main(void)
 									else
 									{
 										//continue around this loop until the specified block has been filled
-										sprintf(tmpstr, "\e[8;1H\e[KBlock count:0x%02X", blockcount);
+										sprintf(tmpstr, "\e[8;1H\e[KBlock count:0x%02X, attempt:0x%02X", blockcount, attemptcount);
 										strcpy(tempstring, tmpstr);
 
 										stringlength = strlen(tempstring);
@@ -1359,6 +1378,7 @@ int main(void)
 								//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
 								HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
 								UartMsgSent = FLAG_SET;
+								FillI2cMemoryFunction = 4;
 							}
 						}
 					}
@@ -1370,7 +1390,7 @@ int main(void)
 						sprintf(tmpstr, "\e[6;1H\e[KBlock fill completed");
 						strcpy(tempstring, tmpstr);
 						sprintf(tmpstr, "\e[7;1H\e[K"); //clear line 7
-						strcpy(tempstring, tmpstr);
+						strcat(tempstring, tmpstr);
 
 
 						uint16_t stringlength = strlen(tempstring);
