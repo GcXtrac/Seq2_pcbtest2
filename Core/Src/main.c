@@ -439,6 +439,7 @@ int main(void)
 			  {
 
 			  }
+
 			  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
 			  {
 				  if (UpdateScreen != 0)
@@ -1647,7 +1648,7 @@ int main(void)
 
 
 
-	  if (ProcessRececivedCanData == FLAG_CLEAR) //don't grab more data until the previous data has been processsed and displayed.
+	  if (ProcessRececivedCanData == FLAG_CLEAR) //don't grab more data until the previous data has been processed and displayed.
 	  {
 		  if (CanDataReceived == FLAG_SET) //test for CAN receive complete callback activity
 		  {
