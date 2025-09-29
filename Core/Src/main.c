@@ -49,6 +49,9 @@
 #define OPBUFFERSIZE 200
 #define MAXLINELENGTH 16
 
+#define PROJECTSTRING "Sequencer MkII"
+#define DATESTRING "29SEP2025"
+
 
 /* USER CODE END PD */
 
@@ -102,6 +105,19 @@ volatile static uint16_t EscapeClearCount = 0;
 volatile static uint16_t FunctionDelay = 0; //value decremented by TIM ISR
 
 volatile static uint8_t XmodemStatus = 0;
+											//bit3-0 form a counter:
+											//1: Initiate X modem transfer, initiate a timer (1)
+											//2: wait for timer (1) period to expire, prompt user to press button
+											//3: wait for button to be pressed
+											//4: Button has been pressed, initialisation character 'C' has been sent to host, another timer (2) started,
+											//		Waiting for x modem packet to arrive
+											//		Single characetr received (EOT) jump to 6
+											//		complete 133 byte packet received: jump to 8
+											//5: packet receive timeout (2) expired, timer (3a) started, jump to step 7.
+											//6: send acknowledgement character and initialise timer (3b)
+											//7: wait for timer (3ab) period to expire, once expired issue X-modem comms finished message
+											//8: test received data packet
+											//
 
 //trying here for the benefit of stm studio...
 uint16_t DacVal = 0;
@@ -227,7 +243,8 @@ int main(void)
 	 uint8_t Timer1AnalogHeartbeat = 1;
 	 uint16_t ScanMsgCount = 0;
 
-
+	 uint16_t stringlength = 0;
+	 uint8_t Resetcontrol = 0;
 
   /* USER CODE END 1 */
 
@@ -355,11 +372,36 @@ int main(void)
 
   //clear entire screen
   strcpy(tempstring, "\e[2J");
-  uint16_t stringlength = strlen(tempstring);
+  stringlength = strlen(tempstring);
   //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
   HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
   UartMsgSent = FLAG_SET;
 
+  while (UartMsgSent == FLAG_SET)
+  {
+  }
+
+  strcpy(tempstring, PROJECTSTRING);
+  strcat(tempstring, "\r\n");
+  stringlength = strlen(tempstring);
+  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+  UartMsgSent = FLAG_SET;
+
+  while (UartMsgSent == FLAG_SET)
+  {
+  }
+
+  strcpy(tempstring, DATESTRING);
+  strcat(tempstring, "\r\n");
+  stringlength = strlen(tempstring);
+  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+  UartMsgSent = FLAG_SET;
+
+  while (UartMsgSent == FLAG_SET)
+  {
+  }
 
   /*
   struct I2cConfig{
@@ -514,6 +556,17 @@ int main(void)
 		  }
 	  }
 
+	  if (Resetcontrol != 0)
+	  {
+		  if (UartMsgSent == FLAG_CLEAR)
+		  {
+			  if (FunctionDelay == 0)
+			  {
+				  HAL_NVIC_SystemReset();
+			  }
+		  }
+	  }
+
 
 	  if (XmodemStatus != 0)
 	  {
@@ -561,7 +614,7 @@ int main(void)
 
 				  case(4):
 
-						if (FunctionDelay == 0) //test for timeout expiry
+						if (FunctionDelay == 0) //test for timeout expiry.
 						{
 							uint8_t tempval = 0;
 							tempval = RxBufferCount; //obtain number of characters held in the 2ndary receive buffer
@@ -1913,6 +1966,26 @@ int main(void)
 			  recognisedstring = FLAG_CLEAR;
 
 
+			  if (commandlength == 1)
+			  {
+				  comp = strcmp(RxString, "R");
+				  if (comp == 0)
+				  {
+					  //"R": Prepare to reset sequencer
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, "Sequencer resetting...");
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  recognisedstring = FLAG_SET;
+
+
+					  Resetcontrol = 1;
+					  FunctionDelay = 1000;
+					  //HAL_NVIC_SystemReset();
+				  }
+			  }
+
 			  if (commandlength == 2)
 			  {
 
@@ -1923,7 +1996,7 @@ int main(void)
 
 					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 					  strcpy(tempstring, tmpstr);
-					  strcat(tempstring, "Checkling header block:");
+					  strcat(tempstring, "Checking header block:");
 					  sprintf(tmpstr, "\e[0m"); //reset all attributes
 					  strcat(tempstring, tmpstr);
 
@@ -2763,11 +2836,11 @@ int main(void)
 
 		  if ((XmodemStatus & 0x0F) == 0)
 		  {
-
+			  //Xmodem comms is currently disabled
 			  if (UartMsgSent == FLAG_CLEAR) //check previous serial data has been sent
 			  {
 
-				  //process received serial data.
+				  //process received serial data as basic string commands
 				  RxState = RxState & 0xFE; //clear bit
 
 				  //char tmpstr[20]="";
@@ -2870,10 +2943,6 @@ int main(void)
 
 				  }
 				  XmodemStatus = 8;
-
-
-
-
 
 			  }
 			  //end main loop x-modem packet processing
@@ -3541,13 +3610,13 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-	//Last edited 6JUN2024
+	//Last edited 29SEP2025
 	if (huart->Instance == USART3)
 	//if (huart->Instance == USART1)
 	{
 		if (XmodemStatus == 0)
 		{
-			//copy characters from primary to secondary buffers
+			//copy characters from primary to secondary buffers (Xmodem comms disabled)
 			if (RxBuffer1[0] == 0x1B)
 			{
 				RxState = RxState | 0x08; //indicate to main loop that escape character has been detected
@@ -3614,9 +3683,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 //			if (RxBufferCount > 10)
 //			{
-				RxState = RxState | 0x01; //indicate new character arrival
-			}
-//		}
+			RxState = RxState | 0x01; //indicate new character arrival
+//			}
+		}
 
 		//UartRxData = FLAG_SET; //indicate to main loop that a new character has arrived
 		HAL_UART_Receive_IT (&huart3, (uint8_t *) RxBuffer1, 1); //this re-enables UART reception interrupt
