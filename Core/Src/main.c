@@ -48,9 +48,12 @@
 #define ESCAPEDISPLAYPERIOD 500
 #define OPBUFFERSIZE 200
 #define MAXLINELENGTH 16
+#define LFCHAR 10	//line feed character value
+#define ACKCHAR 6	//Acknowledge character value
+#define CRCHAR 13	//Carriage return character
 
-#define PROJECTSTRING "Sequencer MkII"
-#define DATESTRING "29SEP2025"
+#define PROJECTSTRING "Sequencer MkII V0.0.6"
+#define DATESTRING "3OCT2025"
 
 
 /* USER CODE END PD */
@@ -111,7 +114,7 @@ volatile static uint8_t XmodemStatus = 0;
 											//3: wait for button to be pressed
 											//4: Button has been pressed, initialisation character 'C' has been sent to host, another timer (2) started,
 											//		Waiting for x modem packet to arrive
-											//		Single characetr received (EOT) jump to 6
+											//		Single character received (EOT) jump to 6
 											//		complete 133 byte packet received: jump to 8
 											//5: packet receive timeout (2) expired, timer (3a) started, jump to step 7.
 											//6: send acknowledgement character and initialise timer (3b)
@@ -381,6 +384,18 @@ int main(void)
   {
   }
 
+  //Home cursor
+  strcpy(tempstring, "\e[H");
+  stringlength = strlen(tempstring);
+  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+  UartMsgSent = FLAG_SET;
+
+
+  while (UartMsgSent == FLAG_SET)
+  {
+  }
+
   strcpy(tempstring, PROJECTSTRING);
   strcat(tempstring, "\r\n");
   stringlength = strlen(tempstring);
@@ -599,7 +614,7 @@ int main(void)
 
 						XmodemStatus = 3;
 						Xmodempoacketcount = 0;
-						xmodempacketblockno = 1; //first xmodem block is labelled 1!
+						xmodempacketblockno = 1; //first x-modem block is labelled 1!
 						opwriteptr = 0;	//reset output data pointer
 						opreadptr = 0;
 						opbytecount = 0;
@@ -613,25 +628,25 @@ int main(void)
 					break;
 
 				  case(4):
+					//waiting for packet characters to arrive OR timeout period to expire
+					if (FunctionDelay == 0) //test for timeout expiry.
+					{
+						uint8_t tempval = 0;
+						tempval = RxBufferCount; //obtain number of characters held in the 2ndary receive buffer
+						//tempval = opwriteptr;
 
-						if (FunctionDelay == 0) //test for timeout expiry.
-						{
-							uint8_t tempval = 0;
-							tempval = RxBufferCount; //obtain number of characters held in the 2ndary receive buffer
-							//tempval = opwriteptr;
+						sprintf(tmpstr, "\e[3;1H\e[KX-modem timeout expired");
+						strcpy(tempstring, tmpstr);
 
-							sprintf(tmpstr, "\e[3;1H\e[KX-modem timeout expired");
-							strcpy(tempstring, tmpstr);
+						uint16_t stringlength = strlen(tempstring);
 
-							uint16_t stringlength = strlen(tempstring);
+						//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+						HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+						UartMsgSent = FLAG_SET;
+						XmodemStatus = 5;
+						FunctionDelay = 1000; //value decremented by TIM ISR
 
-							//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
-							HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
-							UartMsgSent = FLAG_SET;
-							XmodemStatus = 5;
-							FunctionDelay = 1000; //value decremented by TIM ISR
-
-						}
+					}
 //						if((XmodemStatus & 0x10) != 0)
 //						{
 //							//x-modem packet received, do something with it
@@ -639,8 +654,8 @@ int main(void)
 //							FunctionDelay = 5000; //value decremented by TIM ISR
 //						}
 
-						//tempval = RxStringLen; //obtain number of characters held in the 2ndary receive buffer
-						break;
+					//tempval = RxStringLen; //obtain number of characters held in the 2ndary receive buffer
+					break;
 
 				  case(5):
 					if (FunctionDelay == 0)
@@ -651,7 +666,7 @@ int main(void)
 
 				  case(6):
 					//we get here if the last xmodem packet termination character has been received
-					tempstring[0] = 0x06; //ACK
+					tempstring[0] = ACKCHAR; //ACK (0x06)
 					tempstring[1] = 0; //string terminator
 
 
@@ -671,12 +686,12 @@ int main(void)
 					UartMsgSent = FLAG_SET;
 
 					FunctionDelay = 5000; //value decremented by TIM ISR
-					XmodemStatus = 7; //terminate x-modem function
+					XmodemStatus = 5; //terminate x-modem function
 					break;
 
 				  case(7):
-					if (FunctionDelay == 0)
-					{
+					//if (FunctionDelay == 0) //2OCT2025: delay handling now taken care of by step 5
+					//{
 						sprintf(tmpstr, "\e[3;1H\e[KX-modem download finished"); //clear line
 						strcpy(tempstring, tmpstr);
 
@@ -686,7 +701,7 @@ int main(void)
 						HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
 						UartMsgSent = FLAG_SET;
 						XmodemStatus = 0;
-					}
+					//}
 					break;
 
 				  case(8):
@@ -695,6 +710,7 @@ int main(void)
 
 					//now test packet data integrity before issuing ACK or NAK response
 					Xmodempoacketcount++;
+
 				  	SetCrc16Value(0);
 					if (RxString[0] == 0x01) //test for SOH (start of header) character
 					{
@@ -702,7 +718,6 @@ int main(void)
 						{
 							if (RxString[2] == (xmodempacketblockno ^ 0xFF))
 							{
-								xmodempacketblockno++;
 
 								uint8_t data = 0;
 								//for (uint8_t i=0; i<RxStringLen; i++)
@@ -721,6 +736,7 @@ int main(void)
 
 								//test calculated CRC with received value
 								uint16_t tempval = GetCrc16Val();
+								tempval = 0;
 								if ((uint8_t)(tempval >> 8) == RxString[131])
 								{
 									if ((uint8_t)(tempval) == RxString[132])
@@ -729,15 +745,9 @@ int main(void)
 										tempval = 1;
 
 									}
-									else
-									{
-										tempval = 0;
-									}
+
 								}
-								else
-								{
-									tempval = 0;
-								}
+
 
 								if (tempval == 0)
 								{
@@ -763,6 +773,7 @@ int main(void)
 								else
 								{
 									//X-modem packet CRC tested OK
+									xmodempacketblockno++; //prepare for next packet reception
 									XmodemStatus = 9;
 
 									//tempstring[0] = 0x06; //ACK
@@ -805,11 +816,11 @@ int main(void)
 					{
 						data = Tempdata[opreadptr];
 
-						//eliminatge LF character
+						//eliminate LF character
 						uint8_t processlinechar = 1;
 						if (linecharcount == 0)
 						{
-							if (data == 10) //test for Line feed (LF) character
+							if (data == LFCHAR) //test for Line feed (LF) character
 							{
 								processlinechar = 0;
 							}
@@ -828,7 +839,7 @@ int main(void)
 						}
 						opbytecount--; //decrement packet byte count
 
-						if (data == 0x0d)
+						if (data == CRCHAR)
 						{
 
 							if (linecount < 64)
@@ -839,7 +850,7 @@ int main(void)
 									{
 										break;
 									}
-									linearray[(linecount*MAXLINELENGTH) + i] = linestring[i];
+									linearray[(linecount * MAXLINELENGTH) + i] = linestring[i];
 								}
 							}
 							linecount++; //advance line counter
@@ -859,7 +870,7 @@ int main(void)
 					//line characters are held in buffer 'linestring[]'
 					//number of characters on line is specified by 'linecharcount'
 					uint8_t lineprocessing = 0;
-					if (linestring[linecharcount-1] == 0x0d) //test for complete line
+					if (linestring[linecharcount-1] == CRCHAR) //test for complete line
 					{
 						//determine data format
 						if (dataformat == 0)
@@ -1287,7 +1298,7 @@ int main(void)
 						{
 							//terminate X-modem transfer
 							FunctionDelay = 5000;
-							XmodemStatus = 7;
+							XmodemStatus = 5;
 						}
 					}
 					else
@@ -1789,7 +1800,7 @@ int main(void)
 	  }
 
 
-	  if (timer1heartbeat == FLAG_SET)
+	  if (timer1heartbeat == FLAG_SET) //test flag set by elapsed time ISR
 	  {
 		  //We get here after 100 timer interrupts have occurred
 		  timer1heartbeat = FLAG_CLEAR;
@@ -1881,7 +1892,7 @@ int main(void)
 		  }
 
 
-		  if (HAL_GPIO_ReadPin(MODE1_GPIO_Port, MODE1_Pin) != 0) //test key switch input
+		  if (HAL_GPIO_ReadPin(MODE1_GPIO_Port, MODE1_Pin) != 0) //main loop monitoring of key switch input
 		  {
 			  HAL_GPIO_WritePin(MODE1_LED_GPIO_Port, MODE1_LED_Pin, GPIO_PIN_SET);
 
@@ -2915,35 +2926,38 @@ int main(void)
 			  //process received serial data.
 			  RxState = RxState & 0xFE; //clear bit
 
-			  if (RxBufferCount == 1)
+			  if (XmodemStatus == 0x04) //initial 'C' has been sent to host so this should be a response packet...
 			  {
-				  if (RxBuffer2[RxReadPtr] == 0x04)
+				  if (RxBufferCount == 1)
 				  {
-					  //xmodem End of transmission character detected
-					  XmodemStatus = 6;
-				  }
-			  }
-
-			  else if (RxBufferCount >= 133) //check fill level of primary receive buffer
-			  {
-				  RxStringLen = 0;
-				  RxString[0] = 0; //terminate string
-				  __HAL_UART_DISABLE_IT(&huart1, UART_IT_RXNE); //disable receive interrupts until current buffer has been tested
-				  for (uint8_t i=0; i<RxBufferCount; i++)
-				  {
-					  RxString[i] = RxBuffer2[RxReadPtr];
-					  RxStringLen++;
-					  RxString[i+1] = 0; //terminate string
-
-					  RxReadPtr = RxReadPtr + 1;
-					  if (RxReadPtr >= RXBUFFERLENGTH) //Check for wrap around condition
+					  if (RxBuffer2[RxReadPtr] == 0x04)
 					  {
-						  RxReadPtr = 0;
+						  //xmodem End of transmission character detected
+						  XmodemStatus = 6;
 					  }
+				  }
+
+				  else if (RxBufferCount >= 133) //check fill level of primary receive buffer
+				  {
+					  RxStringLen = 0;
+					  RxString[0] = 0; //terminate string
+					  __HAL_UART_DISABLE_IT(&huart1, UART_IT_RXNE); //disable receive interrupts until current buffer has been tested
+					  for (uint8_t i=0; i<RxBufferCount; i++)
+					  {
+						  RxString[i] = RxBuffer2[RxReadPtr];
+						  RxStringLen++;
+						  RxString[i+1] = 0; //terminate string
+
+						  RxReadPtr = RxReadPtr + 1;
+						  if (RxReadPtr >= RXBUFFERLENGTH) //Check for wrap around condition
+						  {
+							  RxReadPtr = 0;
+						  }
+
+					  }
+					  XmodemStatus = 8;
 
 				  }
-				  XmodemStatus = 8;
-
 			  }
 			  //end main loop x-modem packet processing
 		  }
