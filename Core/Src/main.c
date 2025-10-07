@@ -52,7 +52,7 @@
 #define ACKCHAR 6	//Acknowledge character value
 #define CRCHAR 13	//Carriage return character
 
-#define PROJECTSTRING "Sequencer MkII V0.0.6"
+#define PROJECTSTRING "Sequencer MkII V0.0.1"
 #define DATESTRING "3OCT2025"
 
 
@@ -135,6 +135,42 @@ volatile static uint16_t ScanValue = 0;
 volatile static uint8_t UpdateScreen = 0;
 
 volatile static uint16_t SeqStepTime = 0;
+
+uint8_t Multishift = 0;	//set to non-zero value to initiate multiple shifting
+uint8_t DedicatedShiftControl = 0;	//bit 7 enables dedicated shift demand sequencing. see serial command "SCx"
+uint8_t ShiftDemand = 0;	//bit 7:set for CAN upshift
+	 	 	 	 	 	 	 //bit 6 set for CAN downshift
+	 	 	 	 	 	 	 //bit 5: set for logic level upshift
+	 	 	 	 	 	 	 //bit 4: set for logic level downshift
+
+
+
+
+uint16_t PreloadPullActivationtime = 50;
+uint16_t PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
+uint16_t PreloadPushActivationtime = 50;
+uint16_t PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
+
+
+uint16_t ShiftDemandPulseCount = 0;
+uint16_t ShiftDemandPulseTime = 100;
+
+
+uint16_t PreloadPullActivationTime = 50;
+uint16_t PreloadPullActivationCount = 0;
+uint16_t PreloadPullDemandPulseTime = 100;
+uint16_t PreloadPullDemandCount = 0;
+uint16_t PreloadPushDelayTime = 100;
+uint16_t PreloadPushActivationTime = 100;
+uint16_t PreloadPushActivationCount = 0;
+uint16_t PreloadPushDemandPulseTime = 100;
+uint16_t PreloadPushDemandCount = 0;
+
+uint16_t Shift2ShiftCount = 0;
+uint16_t Shift2ShiftTime = 500;
+uint16_t ShiftDemandCount = 0;
+
+
 
 //CAN Rx
 CAN_RxHeaderTypeDef CanRxHeader = {};
@@ -248,6 +284,8 @@ int main(void)
 
 	 uint16_t stringlength = 0;
 	 uint8_t Resetcontrol = 0;
+
+
 
   /* USER CODE END 1 */
 
@@ -725,7 +763,7 @@ int main(void)
 								{
 								  data = RxString[i+3];
 								  CalculareCrc16(data);
-								  Tempdata[opwriteptr] = data;
+								  Tempdata[opwriteptr] = data; //copy data payload bytes to a circular buffer
 								  opwriteptr++;
 								  if (opwriteptr >= OPBUFFERSIZE)
 								  {
@@ -735,11 +773,11 @@ int main(void)
 								}
 
 								//test calculated CRC with received value
-								uint16_t tempval = GetCrc16Val();
-								tempval = 0;
-								if ((uint8_t)(tempval >> 8) == RxString[131])
+								uint16_t CalcCrcValue = GetCrc16Val();
+								uint8_t tempval = 0;
+								if ((uint8_t)(CalcCrcValue >> 8) == RxString[131])
 								{
-									if ((uint8_t)(tempval) == RxString[132])
+									if ((uint8_t)(CalcCrcValue) == RxString[132])
 									{
 										//CRC value calculated/received correctly
 										tempval = 1;
@@ -812,7 +850,7 @@ int main(void)
 					//X-modem packet has just been received
 					//read out CR terminated strings
 					uint8_t data = 0;
-					while (opbytecount > 0)
+					while (opbytecount > 0) //test packet data payload count
 					{
 						data = Tempdata[opreadptr];
 
@@ -1249,7 +1287,7 @@ int main(void)
 						else
 						{
 							//all packet data has been fed into the linestring buffer
-							//linstring buffer my hold an incomplete line which will be completed with the next x-modem packet
+							//linestring buffer my hold an incomplete line which will be completed with the next x-modem packet
 							XmodemStatus = 11;
 						}
 					}
@@ -2057,8 +2095,27 @@ int main(void)
 				  }
 			  }
 
-			  if (commandlength == 3)
+			  if (commandlength == 3) //test for 3 character commands
 			  {
+
+				  comp = strcmp(RxString, "CDN");
+				  if (comp == 0)
+				  {
+					  //"CDN": CAN downshift
+					  //initiate CAN downshift with preload pulses
+					  ShiftDemand = 0x40;
+					  ShiftDemand = ShiftDemand | 0x01;
+					  //ShiftDemandPulse = 100; //set duration of shift demand pulse
+//					  PreloadPullActivationtime = 50;
+//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
+//					  PreloadPushActivationtime = 50;
+//					  PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
+
+					  recognisedstring = FLAG_SET;
+				  }
+
+
+
 				  comp = strcmp(RxString, "CSM");
 				  if (comp == 0)
 				  {
@@ -2139,6 +2196,89 @@ int main(void)
 
 				  }
 
+				  comp = strcmp(RxString, "CUP");
+				  if (comp == 0)
+				  {
+					  //"CUP": CAN upshift
+					  //initiate CAN up shift with preload pulses
+					  ShiftDemand = 0x80;
+					  ShiftDemand = ShiftDemand | 0x01;
+//					  ShiftDemandPulse = 100; //set duration of shift demand pulse
+//					  PreloadPullActivationtime = 50;
+//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
+//					  PreloadPushActivationtime = 50;
+//					  PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
+
+					  recognisedstring = FLAG_SET;
+				  }
+
+
+				  comp = strcmp(RxString, "LDN");
+				  if (comp == 0)
+				  {
+					  //"LDN": logic level downshift
+					  //initiate logic level down shift with preload pulses
+					  ShiftDemand = 0x20;
+					  ShiftDemand = ShiftDemand | 0x01;
+//					  ShiftDemandPulse = 100; //set duration of shift demand pulse
+//					  PreloadPullActivationtime = 50;
+//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
+//					  PreloadPushActivationtime = 50;
+//					  PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
+
+					  recognisedstring = FLAG_SET;
+				  }
+
+				  comp = strcmp(RxString, "LUP");
+				  if (comp == 0)
+				  {
+					  //"LUP": logic level upshift
+					  //initiate logic level up shift with preload pulses
+					  ShiftDemand = 0x10;
+					  ShiftDemand = ShiftDemand | 0x01;
+//					  ShiftDemandPulse = 100; //set duration of shift demand pulse
+//					  PreloadPullActivationtime = 50;
+//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
+//					  PreloadPushActivationtime = 50;
+//					  PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
+
+					  recognisedstring = FLAG_SET;
+				  }
+
+				  comp = strncmp(RxString, "SC", 2);
+				  if (comp == 0)
+				  {
+					  if (RxString[2] = '1')
+					  {
+						  //"SC1": Enable dedicated shift demand sequencing
+
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Dedicated shift demand sequencing ENABLED");
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+
+						  DedicatedShiftControl = 0x80;
+
+						  recognisedstring = FLAG_SET;
+					  }
+					  else
+					  {
+						  //"SC0"
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Dedicated shift demand sequencing DISABLED");
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+
+						  DedicatedShiftControl = 0;
+
+						  recognisedstring = FLAG_SET;
+					  }
+				  }
+
+
+
 				  //comp = strcmp(RxString, "XF"); //"XFy" set X-modem received data format
 				  comp = strncmp(RxString, "XF", 2); //"XFy" set X-modem received data format
 				  if (comp == 0)
@@ -2183,7 +2323,7 @@ int main(void)
 
 			  }
 
-			  if (commandlength == 4)
+			  if (commandlength == 4) //4 character command strings
 			  {
 				  //comp = strcmp(RxString, "CAS"); //"CASy": CAN Analogue scan
 				  comp = strncmp(RxString, "CAS", 3); //"CASy": CAN Analogue scan
@@ -2266,6 +2406,59 @@ int main(void)
 					  recognisedstring = FLAG_SET;
 					  I2cReadBlockFunction = 1;
 					  screenblock = FLAG_SET; //prevent other main loop processed overwriting the screen
+				  }
+
+
+				  comp = strcmp(RxString, "MLDN");
+				  if (comp == 0)
+				  {
+					  if (RxString[3] == '0')
+					  {
+						  //Stop sequencer process
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Multiple logic level down shifts");
+						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 5th line, clear text,
+						  strcat(tempstring, tmpstr);
+
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+						  recognisedstring = FLAG_SET;
+
+						  ShiftDemandCount = 0;
+						  ShiftDemand = 0x10;
+						  ShiftDemand = ShiftDemand | 0x01;
+						  Multishift = 0x80;
+
+					  }
+				  }
+
+				  comp = strcmp(RxString, "MLUP");
+				  if (comp == 0)
+				  {
+					  if (RxString[3] == '0')
+					  {
+						  //Stop sequencer process
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Multiple logic level up shifts");
+						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 5th line, clear text,
+						  strcat(tempstring, tmpstr);
+
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+						  recognisedstring = FLAG_SET;
+
+						  ShiftDemandCount = 0;
+						  ShiftDemand = 0x20;
+						  ShiftDemand = ShiftDemand | 0x01;
+						  Multishift = 0x80;
+
+					  }
 				  }
 
 
@@ -3431,6 +3624,184 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		//static uint16_t timer1count = TIMER1PERIOD;
 		static uint16_t DacUpdatecount = TIMER1DACUPDATECOUNT;
 		static uint16_t UartUpdateCount = UARTUPDATEPERIOD;
+
+
+//		 uint8_t ShiftDemand = 0;	//bit 7:set for CAN upshift
+//		 	 	 	 	 	 	 	 //bit 6 set for CAN downshift
+//		 	 	 	 	 	 	 	 //bit 5: set for logic level upshift
+//		 	 	 	 	 	 	 	 //bit 4: set for logic level downshift
+//		 uint8_t ShiftState  = 0;
+//									 //bit 7:set for CAN upshift
+//		 	 	 	 	 	 	 	 //bit 6 set for CAN downshift
+//		 	 	 	 	 	 	 	 //bit 5: set for logic level upshift
+//		 	 	 	 	 	 	 	 //bit 4: set for logic level downshift
+//		 uint16_t ShiftDemandPulse = 100; //set duration of shift demand pulse
+//		 uint16_t PreloadPullActivationtime = 50;
+//		 uint16_t PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
+//		 uint16_t PreloadPushActivationtime = 50;
+//		 uint16_t PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
+
+		//uint16_t PreloadPullActivationTime = 50;
+		//uint16_t PreloadPullActivationCount = 0;
+		//uint16_t PreloadPullDemandPulseTime = 100;
+		//uint16_t PreloadPullDemandCount = 0;
+		//uint16_t PreloadPushDelayTime = 100;
+		//uint16_t PreloadPushActivationTime = 100;
+		//uint16_t PreloadPushActivationCount = 0;
+		//uint16_t PreloadPushDemandPulseTime = 100;
+		//uint16_t PreloadPushDemandCount = 0;
+
+		if (DedicatedShiftControl != 0)	//see serial command "SCx"
+		{
+			if ((ShiftDemand & 0x0F) == 0x01) //see serial commands "LUP","LDN","CUP", "CDN", "MLUP", "MLDN"
+			{
+				ShiftDemandPulseCount = ShiftDemandPulseTime;
+				PreloadPullActivationCount = PreloadPullActivationTime;
+
+				if (Multishift != 0) //see serial commands "MLUP","MLDN"
+				{
+					Shift2ShiftCount = Shift2ShiftTime; //set time to next shift demand (multiple shift requested!)
+				}
+
+
+				ShiftDemand = ShiftDemand | 0x02; //advance state count
+			}
+
+
+			if (ShiftDemandPulseCount != 0)
+			{
+				//apply valid shift demand
+				if ((ShiftDemand & 0xC0) != 0)
+				{
+					//provide CAN shift demand signal update
+					if ((ShiftDemand & 0x80) != 0)
+					{
+						//apply CAN upshift signal state
+					}
+					if ((ShiftDemand & 0x40) != 0)
+					{
+						//apply CAN downshift signal state
+					}
+				}
+				if ((ShiftDemand & 0x30) != 0)
+				{
+					if ((ShiftDemand & 0x20) != 0)
+					{
+						//apply logic level upshift signal state
+						HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_SET);
+
+					}
+					if ((ShiftDemand & 0x10) != 0)
+					{
+						//apply logic level downshift signal state
+						HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_SET);
+					}
+				}
+
+			}
+			else
+			{
+				//apply CAN & logic level inactive shift demand signal states
+				HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_RESET);
+			}
+
+			if (ShiftDemandCount != 0)
+			{
+				ShiftDemandCount--;
+			}
+
+			if (PreloadPullActivationCount != 0)
+			{
+				PreloadPullActivationCount--;
+				if (PreloadPullActivationCount == 0)
+				{
+					ShiftDemand = ShiftDemand & 0xF0;
+					ShiftDemand = ShiftDemand | 0x03; //advance state count
+					PreloadPullDemandCount = PreloadPullDemandPulseTime;
+				}
+			}
+
+			if (PreloadPullDemandCount != 0)
+			{
+				//activate preload 'pull' signal
+				HAL_GPIO_WritePin(GPIOD, HSD_3_Pin, GPIO_PIN_SET);
+				PreloadPullDemandCount--;
+
+				if (PreloadPullDemandCount == 0)
+				{
+					ShiftDemand = ShiftDemand & 0xF0;
+					ShiftDemand = ShiftDemand | 0x04; //advance state count
+					PreloadPushActivationCount = PreloadPushActivationTime;
+				}
+			}
+			else
+			{
+				//deactivate preload 'pull' signal
+				HAL_GPIO_WritePin(GPIOD, HSD_3_Pin, GPIO_PIN_RESET);
+			}
+
+			if (PreloadPushActivationCount != 0)
+			{
+				PreloadPushActivationCount--;
+				if (PreloadPushActivationCount == 0)
+				{
+					ShiftDemand = ShiftDemand & 0xF0;
+					ShiftDemand = ShiftDemand | 0x05; //advance state count
+					PreloadPushDemandCount = PreloadPushDemandPulseTime;
+				}
+			}
+
+			if (PreloadPushDemandCount != 0)
+			{
+				//activate preload 'push' signal
+				HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_SET);
+				PreloadPushDemandCount--;
+				if (PreloadPushDemandCount == 0)
+				{
+					//shift demand completed
+					if (Multishift != 0)
+					{
+						ShiftDemand = ShiftDemand & 0xF0;
+						if (ShiftDemandCount < 9)
+						{
+							ShiftDemand = ShiftDemand | 0x06; //advance state count
+
+							ShiftDemandCount++;  //count applied shift demands
+						}
+						else
+						{
+							Multishift = 0; //disable multiple shifting
+						}
+
+					}
+					else
+					{
+						ShiftDemand = ShiftDemand & 0xF0;
+					}
+				}
+			}
+			else
+			{
+				//deactivate preload 'push' signal
+				HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_SET);
+			}
+
+			if (Multishift != 0)
+			{
+				if (Shift2ShiftCount != 0)
+				{
+					Shift2ShiftCount--;
+					if (Shift2ShiftCount == 0)
+					{
+						ShiftDemand = ShiftDemand | 0x01; //prepare to initiate a new shift demand
+					}
+				}
+			}
+
+		}
+
+
 
 		if (CanAnalogScanState != 0)
 		{
