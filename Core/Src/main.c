@@ -53,7 +53,7 @@
 #define CRCHAR 13	//Carriage return character
 
 #define PROJECTSTRING "Sequencer MkII V0.0.1"
-#define DATESTRING "3OCT2025"
+#define DATESTRING "9OCT2025"
 
 
 /* USER CODE END PD */
@@ -86,7 +86,9 @@ volatile static uint8_t CanState = 0;
 volatile static uint8_t UartOutputFlag = FLAG_CLEAR; //flag normally set by TIM ISR and cleared within the main loop
 volatile static uint8_t UartMsgSent = FLAG_CLEAR; //flag normally set when UART data is transmitted and cleared when transmission is completed
 
+//static used here means that only this file cvan access these global variables
 static uint8_t CanRxData[8] = {};
+static uint8_t TempCanRxData[8] = {};
 
 
 volatile char RxBuffer1[2] = "";
@@ -138,6 +140,7 @@ volatile static uint16_t SeqStepTime = 0;
 
 uint8_t Multishift = 0;	//set to non-zero value to initiate multiple shifting
 uint8_t DedicatedShiftControl = 0;	//bit 7 enables dedicated shift demand sequencing. see serial command "SCx"
+									//bit 6 enables shift emand sequencin via CAN
 uint8_t ShiftDemand = 0;	//bit 7:set for CAN upshift
 	 	 	 	 	 	 	 //bit 6 set for CAN downshift
 	 	 	 	 	 	 	 //bit 5: set for logic level upshift
@@ -170,12 +173,32 @@ uint16_t Shift2ShiftCount = 0;
 uint16_t Shift2ShiftTime = 500;
 uint16_t ShiftDemandCount = 0;
 
+uint8_t recmsgindex = 0;
+uint8_t reccount = 0;
 
+uint8_t CanRxFifoFull = 0;
 
 //CAN Rx
 CAN_RxHeaderTypeDef CanRxHeader = {};
+CAN_RxHeaderTypeDef TempCanRxHeader = {};
 CAN_RxHeaderTypeDef * pCanRxHeader = &CanRxHeader;
+CAN_RxHeaderTypeDef * pTempCanRxHeader = &TempCanRxHeader;
 
+CAN_TxHeaderTypeDef CanTxHeader1399ShiftDmd = {};
+CAN_TxHeaderTypeDef * pTempCanTxHeader = &CanTxHeader1399ShiftDmd;
+
+uint8_t CanTxMailboxfullmsg = FLAG_CLEAR;  //flag set when CAN tx mailbox is full, this prevents repeated output
+
+uint32_t CanErrorValue = 0;
+uint16_t PositionMaxLimit = 0x380; //limit used to prevent further upshifting
+uint16_t PositionMinLimit = 0x100; //limit used to prevent further downshifting
+uint16_t PrevActuatorPosition = 0;
+uint16_t ActuatorPosition = 0;
+uint8_t ActuatorPositionState = 0; 	//bit0: indicates value has been updated used as a flag between CAN received ISR and main loop
+									//bit1: set if CAN position signal has been received, this value will be reset by aTIM1 timepout period expiring.
+
+uint32_t PositionSignalTimeoutCount = 0;
+uint32_t PositionSignalTimeoutPeriod = 50;
 
 /* USER CODE END PV */
 
@@ -195,6 +218,63 @@ static void MX_I2C2_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+uint8_t CanShiftDemand(uint8_t direction)
+{
+	//Used by sequenced shift demand functions
+	//Created 9OCT2025
+	//input:
+	//	direction:
+	//		0: inactive shift demand
+	//		1: upshift
+	//		2(-1):downshift
+
+	uint32_t x = 0;
+	uint8_t CanTxError = 0;
+	x = HAL_CAN_GetTxMailboxesFreeLevel(&hcan1);
+	if (x != 0)
+	{
+		  uint8_t datapayload[8] = {0};
+
+		  switch(direction)
+		  {
+		  	  case(1):
+				//upshift
+				datapayload[2] = 0x10;
+				break;
+
+		  	  //case(-1):
+		  	  case(2):
+				//downshift
+				datapayload[2] = 0x20;
+				break;
+
+
+		  	  default:
+
+		  }
+
+		  //uint32_t Txmailbox = CAN_TX_MAILBOX0;
+		  uint32_t Txmailbox = 0xff;
+		  //uint32_t* pTxmailbox = Txmailbox;
+
+		  if (HAL_CAN_AddTxMessage(&hcan1, pTempCanTxHeader, datapayload, &Txmailbox) != HAL_OK)
+		  {
+			  //there is a problem with sending a CAN message...
+			  CanTxError = 1;
+		  }
+
+		  CanTxMailboxfullmsg = FLAG_CLEAR; //allow TX mailbox full message to be displayed if the mailbox becomes full again!
+
+	}
+
+	else
+	{
+		//CAN TX mailbox is full - can't send CAN message
+		CanTxError = 2;
+	}
+
+	return CanTxError;
+}
 
 /* USER CODE END 0 */
 
@@ -224,7 +304,7 @@ int main(void)
 	uint8_t CanData[8] = {0};
 
 	uint8_t CanTxMsgCount = 0; //generic CAN TX message counter
-	uint8_t CanTxMailboxfullmsg = FLAG_CLEAR;  //flag set when CAN tx mailbox is full, this prevents repeated output
+
 	uint8_t candatacount = 0;
 
 	uint8_t ProcessRececivedCanData = FLAG_CLEAR;
@@ -285,6 +365,14 @@ int main(void)
 	 uint16_t stringlength = 0;
 	 uint8_t Resetcontrol = 0;
 
+	 pTempCanTxHeader->DLC = 8;
+	 pTempCanTxHeader->IDE = CAN_ID_STD;
+	 pTempCanTxHeader->RTR = CAN_RTR_DATA;
+	 //pCanTxHeader->StdId = 0x234; //standard identifier
+	 pTempCanTxHeader->StdId = 0x102; //standard identifier used for loop back mode
+	 pTempCanTxHeader->ExtId = 0x00;
+	 pTempCanTxHeader->TransmitGlobalTime = 0;
+
 
 
   /* USER CODE END 1 */
@@ -336,12 +424,13 @@ int main(void)
 
 
 
+  uint8_t CanFilterErr = 0;
   CAN_FilterTypeDef FilterConfig;
   CAN_FilterTypeDef* pFilterConfig = &FilterConfig;
   pFilterConfig->FilterIdLow = 0x123u<<5;
   //pFilterConfig->FilterIdHigh = 0x345u;
   //pFilterConfig->FilterIdHigh = 0x123u<<5;
-  pFilterConfig->FilterIdHigh = 0x000u<<5; //received everything
+  pFilterConfig->FilterIdHigh = 0x000u<<5; //receive everything
   pFilterConfig->FilterActivation = CAN_FILTER_ENABLE;
   pFilterConfig->FilterBank = 0;
   pFilterConfig->FilterFIFOAssignment = CAN_FILTER_FIFO0;
@@ -352,6 +441,37 @@ int main(void)
   pFilterConfig->FilterScale = CAN_FILTERSCALE_16BIT;
   //pFilterConfig->SlaveStartFilterBank = 0;
   //pFilterConfig->SlaveStartFilterBank = 14;
+
+
+  if (HAL_CAN_ConfigFilter(&hcan1, pFilterConfig) != HAL_OK)
+  {
+	  //problem with CAN filter setup!
+	  CanFilterErr = 0x01;
+  }
+
+
+  //pFilterConfig->FilterIdHigh = 0x345u;
+  //pFilterConfig->FilterIdHigh = 0x123u<<5;
+  pFilterConfig->FilterIdHigh = 0x111u<<5;
+  pFilterConfig->FilterIdLow = 0x254u<<5;
+  pFilterConfig->FilterActivation = CAN_FILTER_ENABLE;
+  pFilterConfig->FilterBank = 1;
+  pFilterConfig->FilterFIFOAssignment = CAN_FILTER_FIFO0;
+  //pFilterConfig->FilterMaskIdHigh = 0x345u<<5;
+  pFilterConfig->FilterMaskIdHigh = 0x567u<<5;
+  pFilterConfig->FilterMaskIdLow = 0x444u<<5;
+  pFilterConfig->FilterMode = CAN_FILTERMODE_IDLIST;
+  pFilterConfig->FilterScale = CAN_FILTERSCALE_16BIT;
+  //pFilterConfig->SlaveStartFilterBank = 0;
+  //pFilterConfig->SlaveStartFilterBank = 14;
+
+
+  if (HAL_CAN_ConfigFilter(&hcan1, pFilterConfig) != HAL_OK)
+  {
+	  //problem with CAN filter setup!
+	  CanFilterErr = CanFilterErr | 0x02;
+  }
+
 
 
 //  //Prepare for CAN reception
@@ -374,16 +494,21 @@ int main(void)
 //  HAL_CAN_ConfigFilter(&hcan1, PtrCanFilterConfig); //Configure the CAN reception filters (HAL CAN configuration function)
 
 
-  uint8_t CanFilterErr = 0;
-  if (HAL_CAN_ConfigFilter(&hcan1, pFilterConfig) != HAL_OK)
-  {
-	  //problem with CAN filter setup!
-	  CanFilterErr = 0xff;
-  }
+
 
   //HAL_StatusTypeDef HAL_CAN_ActivateNotification (CAN_HandleTypeDef * hcan, uint32_t ActiveITs)
   uint8_t CanError = 0;
-  if (HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_ERROR) != HAL_OK)
+
+//  CAN_IT_ERROR_WARNING
+//  CAN_IT_ERROR_PASSIVE
+//  CAN_IT_BUSOFF
+//  CAN_IT_LAST_ERROR_CODE
+  if (HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING
+		  | CAN_IT_RX_FIFO0_OVERRUN
+		  | CAN_IT_RX_FIFO0_FULL
+		  | CAN_IT_ERROR
+		  | CAN_IT_BUSOFF
+		  ) != HAL_OK)
   {
 	  CanError = 0xff;
   }
@@ -485,6 +610,34 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+
+	  if (ActuatorPositionState & 0x01) //set when reported actuator position (over CAN) has changed or set by serial command "SC1" or CAN message timeout period expiring (TIM1 ISR)
+	  {
+			if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+			{
+
+				if ((ActuatorPositionState & 0x02) == 0)
+				{
+					//CAN position signal has not been received
+					//sprintf(tmpstr, "\e[6;12H\e[1;36;40mNO CAN POSITION SIGNAL\e[0m"); //set cyan text + reset attributes
+					sprintf(tmpstr, "\e[6;12H\e[7;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
+					strcpy(tempstring, tmpstr);
+				}
+				else
+				{
+					sprintf(tmpstr, "\e[6;12H\e[1;36;40m\e[KActuator pos:%d\e[0m", ActuatorPosition); //set cyan text + reset attributes
+					strcpy(tempstring, tmpstr);
+				}
+				uint16_t stringlength = strlen(tempstring);
+				//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+				HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+				UartMsgSent = FLAG_SET;
+
+
+				ActuatorPositionState = ActuatorPositionState & 0xFE; //reset control bit
+			}
+
+	  }
 
 	  if (CanAnalogScanState != 0) //function controlled by serial command "CASy"
 	  {
@@ -1764,10 +1917,36 @@ int main(void)
 
 	  if ((CanState & 0x01) != 0) //test for CAN error callback activity
 	  {
-		  CanState = CanState & 0xFE; //clear control flag
+		  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+		  {
+			  //clear message from display
+			  sprintf(tempstring, "\e[4;1H\e[KCAN error reported:0x%08X", CanErrorValue); //move cursor to 4th line, clear text,
+			  uint16_t stringlength = strlen(tempstring);
+			  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+			  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+			  UartMsgSent = FLAG_SET;
+
+
+
+			  CanState = CanState & 0xFE; //clear control flag
+		  }
 
 	  }
 
+
+	  if (CanRxFifoFull != 0)
+	  {
+		  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+		  {
+			  sprintf(tempstring, "\e[20;1H\e[KCAN Rx FIFO full!");
+
+			  uint16_t stringlength = strlen(tempstring);
+			  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+			  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+			  UartMsgSent = FLAG_SET;
+			  CanRxFifoFull = 0;
+		  }
+	  }
 
 
 	  if (ProcessRececivedCanData == FLAG_CLEAR) //don't grab more data until the previous data has been processed and displayed.
@@ -1775,11 +1954,11 @@ int main(void)
 		  if (CanDataReceived == FLAG_SET) //test for CAN receive complete callback activity
 		  {
 			  //grab a copy of the received data
-			  CanIdentifier = pCanRxHeader->StdId;
-			  CanDlc = pCanRxHeader->DLC;
+			  CanIdentifier = pTempCanRxHeader->StdId;
+			  CanDlc = pTempCanRxHeader->DLC;
 			  for (uint8_t i=0; i<CanDlc; i++)
 			  {
-				  CanData[i] = CanRxData[i];
+				  CanData[i] = TempCanRxData[i];
 			  }
 
 			  ProcessRececivedCanData = FLAG_SET;
@@ -1797,9 +1976,12 @@ int main(void)
 			  sprintf(tempstring, "\e[21;1HCAN Id:0x%3X, DLC:%d, data:", CanIdentifier, CanDlc);
 			  for (uint8_t i=0; i<CanDlc; i++)
 			  {
-				  sprintf(tempstring2, "0x%02X, ", CanData[i]);
+				  sprintf(tempstring2, "0x%02X,", CanData[i]);
 				  strcat(tempstring, tempstring2);
 			  }
+
+			  sprintf(tempstring2, "(c:%d)", recmsgindex);
+			  strcat(tempstring, tempstring2);
 
 			  uint16_t stringlength = strlen(tempstring);
 			  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
@@ -1870,7 +2052,7 @@ int main(void)
 				  {
 					  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
 					  {
-						  sprintf(tempstring, "\e[20;1HCAN message %3d", CanTxMsgCount);
+						  sprintf(tempstring, "\e[20;1H\e[KCAN Tx message %3d", CanTxMsgCount);
 						  uint16_t stringlength = strlen(tempstring);
 						  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
 						  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
@@ -1889,7 +2071,7 @@ int main(void)
 				  {
 					  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
 					  {
-						  sprintf(tempstring, "\e[20;1HCAN TX mailboxes FULL!");
+						  sprintf(tempstring, "\e[20;1H\e[KCAN TX mailboxes FULL!");
 						  uint16_t stringlength = strlen(tempstring);
 						  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
 						  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
@@ -2258,7 +2440,8 @@ int main(void)
 						  sprintf(tmpstr, "\e[0m"); //reset all attributes
 						  strcat(tempstring, tmpstr);
 
-						  DedicatedShiftControl = 0x80;
+						  DedicatedShiftControl = DedicatedShiftControl | 0x80;
+						  ActuatorPositionState = 0x01; //initiate displaying of CANn actuator position
 
 						  recognisedstring = FLAG_SET;
 					  }
@@ -2409,54 +2592,135 @@ int main(void)
 				  }
 
 
+				  comp = strcmp(RxString, "MCDN");
+				  if (comp == 0)
+				  {
+					  //"MCDN" Multiple CAN downshift sequence
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, "Multiple CAN down shifts");
+					  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+					  strcat(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 5th line, clear text,
+					  strcat(tempstring, tmpstr);
+
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  recognisedstring = FLAG_SET;
+
+					  ShiftDemandCount = 0;
+					  ShiftDemand = 0x80;
+					  ShiftDemand = ShiftDemand | 0x01;
+					  Multishift = 0x80;
+				  }
+
+				  comp = strcmp(RxString, "MCUP");
+				  if (comp == 0)
+				  {
+					  //"MCUP" Multiple CAN upshift sequence
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, "Multiple CAN up shifts");
+					  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+					  strcat(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 5th line, clear text,
+					  strcat(tempstring, tmpstr);
+
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  recognisedstring = FLAG_SET;
+
+					  ShiftDemandCount = 0;
+					  ShiftDemand = 0x40;
+					  ShiftDemand = ShiftDemand | 0x01;
+					  Multishift = 0x80;
+				  }
+
 				  comp = strcmp(RxString, "MLDN");
 				  if (comp == 0)
 				  {
-					  if (RxString[3] == '0')
-					  {
-						  //Stop sequencer process
-						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
-						  strcpy(tempstring, tmpstr);
-						  strcat(tempstring, "Multiple logic level down shifts");
-						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
-						  strcat(tempstring, tmpstr);
-						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 5th line, clear text,
-						  strcat(tempstring, tmpstr);
+					  //"MLDN" Multiple logic level downshift sequence
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, "Multiple logic level down shifts");
+					  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+					  strcat(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 5th line, clear text,
+					  strcat(tempstring, tmpstr);
 
-						  sprintf(tmpstr, "\e[0m"); //reset all attributes
-						  strcat(tempstring, tmpstr);
-						  recognisedstring = FLAG_SET;
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  recognisedstring = FLAG_SET;
 
-						  ShiftDemandCount = 0;
-						  ShiftDemand = 0x10;
-						  ShiftDemand = ShiftDemand | 0x01;
-						  Multishift = 0x80;
-
-					  }
+					  ShiftDemandCount = 0;
+					  ShiftDemand = 0x10;
+					  ShiftDemand = ShiftDemand | 0x01;
+					  Multishift = 0x80;
 				  }
 
 				  comp = strcmp(RxString, "MLUP");
 				  if (comp == 0)
 				  {
+					  //"MLUP" Multiple logic level upshift sequence
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, "Multiple logic level up shifts");
+					  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+					  strcat(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 5th line, clear text,
+					  strcat(tempstring, tmpstr);
+
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  recognisedstring = FLAG_SET;
+
+					  ShiftDemandCount = 0;
+					  ShiftDemand = 0x20;
+					  ShiftDemand = ShiftDemand | 0x01;
+					  Multishift = 0x80;
+				  }
+
+				  comp = strncmp(RxString, "SCC", 3);
+				  if (comp == 0)
+				  {
 					  if (RxString[3] == '0')
 					  {
-						  //Stop sequencer process
+						  //"SCC0"
 						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 						  strcpy(tempstring, tmpstr);
-						  strcat(tempstring, "Multiple logic level up shifts");
+						  strcat(tempstring, "Shift control sequencing CAN Disabled");
 						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
 						  strcat(tempstring, tmpstr);
-						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 5th line, clear text,
+						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
 						  strcat(tempstring, tmpstr);
 
 						  sprintf(tmpstr, "\e[0m"); //reset all attributes
 						  strcat(tempstring, tmpstr);
+
+						  DedicatedShiftControl = DedicatedShiftControl & 0xBF; //disable shift demand sequence CAN output
+
 						  recognisedstring = FLAG_SET;
 
-						  ShiftDemandCount = 0;
-						  ShiftDemand = 0x20;
-						  ShiftDemand = ShiftDemand | 0x01;
-						  Multishift = 0x80;
+
+					  }
+					  if (RxString[3] == '1')
+					  {
+						  //"SCC1"
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Shift control sequencing CAN Enabled");
+						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
+
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+
+						  DedicatedShiftControl = DedicatedShiftControl | 0x40; //Enable shift demand sequence CAN output
+
+						  recognisedstring = FLAG_SET;
+
 
 					  }
 				  }
@@ -2930,7 +3194,7 @@ int main(void)
 		  {
 
 			  //char tmpstr[20] = "";
-			  sprintf(tmpstr, "\e[2;1H\e[1;37;41m"); //move cursor to 2nd line, white text on red background
+			  sprintf(tmpstr, "\e[2;1H\e[K\e[1;37;41m"); //move cursor to 2nd line, white text on red background
 			  strcpy(tempstring, tmpstr);
 			  strcat(tempstring, "ESCAPE");
 			  sprintf(tmpstr, "\e[0m"); //reset all attributes
@@ -3651,36 +3915,87 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		//uint16_t PreloadPushDemandPulseTime = 100;
 		//uint16_t PreloadPushDemandCount = 0;
 
-		if (DedicatedShiftControl != 0)	//see serial command "SCx"
+		if (PositionSignalTimeoutCount != 0)
 		{
+			PositionSignalTimeoutCount--;
+			if (PositionSignalTimeoutCount == 0)
+			{
+				ActuatorPositionState = ActuatorPositionState & 0xFD; //reset status flag
+				ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop to update display
+			}
+		}
+
+		if ((DedicatedShiftControl & 0x80) != 0)	//see serial command "SCx"
+		{
+			uint8_t Errval = 0;
 			if ((ShiftDemand & 0x0F) == 0x01) //see serial commands "LUP","LDN","CUP", "CDN", "MLUP", "MLDN"
 			{
-				ShiftDemandPulseCount = ShiftDemandPulseTime;
-				PreloadPullActivationCount = PreloadPullActivationTime;
 
-				if (Multishift != 0) //see serial commands "MLUP","MLDN"
+				//test for repeated up-shifts
+				uint8_t InitiateShiftDemand = 0;
+				if ((ShiftDemand & 0xA0) != 0) //bits set by serial commands LUP,CUP, MLUP, MCUP,
 				{
-					Shift2ShiftCount = Shift2ShiftTime; //set time to next shift demand (multiple shift requested!)
+					if (ActuatorPosition < PositionMaxLimit)
+					{
+						InitiateShiftDemand = 1;
+					}
 				}
+				if ((ShiftDemand & 0x50) != 0) //bits set by serial commands "LDN", "CDN", "MLDN", "MCDN",
+				{
+					if (ActuatorPosition > PositionMinLimit)
+					{
+						InitiateShiftDemand = 1;
+					}
+				}
+				if (InitiateShiftDemand == 1)
+				{
+					ShiftDemandPulseCount = ShiftDemandPulseTime;
+					PreloadPullActivationCount = PreloadPullActivationTime;
+
+					if (Multishift != 0) //see serial commands "MLUP","MLDN"
+					{
+						Shift2ShiftCount = Shift2ShiftTime; //set time to next shift demand (multiple shift requested!)
+					}
 
 
-				ShiftDemand = ShiftDemand | 0x02; //advance state count
+					ShiftDemand = ShiftDemand | 0x02; //advance state count
+				}
+				else
+				{
+					ShiftDemand = 0;
+					Multishift  = 0;
+				}
 			}
 
 
 			if (ShiftDemandPulseCount != 0)
 			{
 				//apply valid shift demand
-				if ((ShiftDemand & 0xC0) != 0)
+				if ((DedicatedShiftControl & 0x40) != 0) //see serial command "SCCx"
 				{
-					//provide CAN shift demand signal update
-					if ((ShiftDemand & 0x80) != 0)
+					if ((ShiftDemand & 0xC0) != 0)
 					{
-						//apply CAN upshift signal state
-					}
-					if ((ShiftDemand & 0x40) != 0)
-					{
-						//apply CAN downshift signal state
+						//provide CAN shift demand signal update
+						if ((ShiftDemand & 0x80) != 0)
+						{
+							//apply CAN upshift signal state
+
+							Errval = CanShiftDemand(1);
+							if (Errval != 0)
+							{
+								DedicatedShiftControl = DedicatedShiftControl & 0xBF; //kill CAN shift demands
+							}
+						}
+						if ((ShiftDemand & 0x40) != 0)
+						{
+							//apply CAN downshift signal state
+							//Errval = CanShiftDemand(-1);
+							Errval = CanShiftDemand(2);
+							if (Errval != 0)
+							{
+								DedicatedShiftControl = DedicatedShiftControl & 0xBF; //kill CAN shift demands
+							}
+						}
 					}
 				}
 				if ((ShiftDemand & 0x30) != 0)
@@ -3698,18 +4013,25 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 					}
 				}
 
+				ShiftDemandPulseCount--;
 			}
+
 			else
 			{
 				//apply CAN & logic level inactive shift demand signal states
 				HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_RESET);
+				if ((DedicatedShiftControl & 0x40) != 0)
+				{
+					Errval = CanShiftDemand(0); //output inactive shift demand signal
+					if (Errval != 0)
+					{
+						DedicatedShiftControl = DedicatedShiftControl & 0xBF; //kill CAN shift demands
+					}
+				}
 			}
 
-			if (ShiftDemandCount != 0)
-			{
-				ShiftDemandCount--;
-			}
+
 
 			if (PreloadPullActivationCount != 0)
 			{
@@ -3762,16 +4084,46 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 					//shift demand completed
 					if (Multishift != 0)
 					{
-						ShiftDemand = ShiftDemand & 0xF0;
-						if (ShiftDemandCount < 9)
-						{
-							ShiftDemand = ShiftDemand | 0x06; //advance state count
+						ShiftDemand = ShiftDemand & 0xF0; //clear progress counter bits
 
-							ShiftDemandCount++;  //count applied shift demands
+						if ((ActuatorPositionState & 0x02) != 0)
+						{
+//							//test for repeated up-shifts
+//							if ((ShiftDemand & 0xA0) != 0)
+//							{
+//								if (ActuatorPosition < PositionMaxLimit)
+//								{
+//									ShiftDemand = ShiftDemand | 0x06; //advance state count
+//								}
+//								else
+//								{
+//									Multishift = 0; //disable multiple shifting
+//								}
+//							}
+//							//test for repeated down-shifts
+//							if ((ShiftDemand & 0x50) != 0)
+//							{
+//								if (ActuatorPosition > PositionMinLimit)
+//								{
+//									ShiftDemand = ShiftDemand | 0x06; //advance state count
+//								}
+//								else
+//								{
+//									Multishift = 0; //disable multiple shifting
+//								}
+//							}
 						}
 						else
 						{
-							Multishift = 0; //disable multiple shifting
+							if (ShiftDemandCount < 9)
+							{
+								ShiftDemand = ShiftDemand | 0x06; //advance state count
+								ShiftDemandCount++;
+							}
+							else
+							{
+								Multishift = 0; //disable multiple shifting
+							}
 						}
 
 					}
@@ -3784,7 +4136,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			else
 			{
 				//deactivate preload 'push' signal
-				HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_RESET);
 			}
 
 			if (Multishift != 0)
@@ -3899,10 +4251,22 @@ void HAL_CAN_ErrorCallback (CAN_HandleTypeDef * hcan)
 		CanState = CanState | 0x01; //indicate to main loop that CAN error callback was called
 
 		//uint32_t HAL_CAN_GetError (const CAN_HandleTypeDef * hcan)
-		uint32_t y = 0;
-		y = HAL_CAN_GetError(hcan);
+
+		CanErrorValue = HAL_CAN_GetError(hcan);
 
 
+	}
+}
+
+
+void HAL_CAN_RxFifo0FullCallback(CAN_HandleTypeDef *hcan)
+{
+	//Created 8OCT2025
+	// call back function - called from stm32l4xx_hal_can.c
+	//FIFO 0 is full interrupt handler
+	if (hcan->Instance == CAN1)
+	{
+		CanRxFifoFull = 1;
 	}
 }
 
@@ -3911,6 +4275,7 @@ void HAL_CAN_ErrorCallback (CAN_HandleTypeDef * hcan)
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
 	//CAN message received
+	//Last edited 8OCT2025
 	if (hcan->Instance == CAN1)
 	{
 		uint32_t qty = 0;
@@ -3918,10 +4283,49 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 		if (qty != 0)
 		{
 
-
-
 			HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, pCanRxHeader, CanRxData);
-			CanDataReceived = FLAG_SET;
+
+			if (CanDataReceived == FLAG_CLEAR)
+			{
+
+				//main loop is ready to process a new message
+				TempCanRxHeader = CanRxHeader;
+
+				uint8_t* srcptr = NULL;
+				uint8_t* dstptr = NULL;
+				srcptr = &CanRxData[0];
+				dstptr = &TempCanRxData[0];
+				for (uint8_t i=0; i<8; i++)
+				{
+					*dstptr++ = *srcptr++;
+				}
+				//HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, pCanRxHeader, CanRxData);
+				recmsgindex = reccount;
+				CanDataReceived = FLAG_SET;
+			}
+
+
+			if (pCanRxHeader->StdId == 0x254)
+			{
+				//keep track of actuator output shaft position
+				ActuatorPosition = (CanRxData[4] & 0x03) << 8;
+				ActuatorPosition = ActuatorPosition | CanRxData[3];
+
+				if ((ActuatorPositionState & 0x02)== 0)
+				{
+					ActuatorPositionState = ActuatorPositionState | 0x02; //record that an actuator message has been received
+					ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop to update displayed position
+				}
+				PositionSignalTimeoutCount = PositionSignalTimeoutPeriod; //value decremented by TIM1 ISR
+				if (ActuatorPosition != PrevActuatorPosition)
+				{
+					PrevActuatorPosition = ActuatorPosition;
+
+					ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop to update displayed position
+				}
+			}
+
+			reccount++;
 
 		}
 	}
