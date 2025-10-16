@@ -139,12 +139,15 @@ volatile static uint8_t UpdateScreen = 0;
 volatile static uint16_t SeqStepTime = 0;
 
 uint8_t Multishift = 0;	//set to non-zero value to initiate multiple shifting
-uint8_t DedicatedShiftControl = 0;	//bit 7 enables dedicated shift demand sequencing. see serial command "SCx"
-									//bit 6 enables shift emand sequencin via CAN
+uint8_t DedicatedShiftControl = 0x20;	//bit 7 enables dedicated shift demand sequencing. see serial command "SCx"
+										//bit 6 enables shift demand sequencing via CAN. see serial command "SCCx"
+										//bit 5 enables control of shift demand based on reported CAN position (enabled by default)
+
 uint8_t ShiftDemand = 0;	//bit 7:set for CAN upshift
-	 	 	 	 	 	 	 //bit 6 set for CAN downshift
-	 	 	 	 	 	 	 //bit 5: set for logic level upshift
-	 	 	 	 	 	 	 //bit 4: set for logic level downshift
+	 	 	 	 	 	 	//bit 6 set for CAN downshift
+	 	 	 	 	 	 	//bit 5: set for logic level upshift
+	 	 	 	 	 	 	//bit 4: set for logic level downshift
+							//bit 3~0: state count
 
 
 
@@ -195,10 +198,15 @@ uint16_t PositionMinLimit = 0x100; //limit used to prevent further downshifting
 uint16_t PrevActuatorPosition = 0;
 uint16_t ActuatorPosition = 0;
 uint8_t ActuatorPositionState = 0; 	//bit0: indicates value has been updated used as a flag between CAN received ISR and main loop
-									//bit1: set if CAN position signal has been received, this value will be reset by aTIM1 timepout period expiring.
+									//bit1: set if CAN position signal has been received, this value will be reset by TIM1 timepout period expiring.
 
 uint32_t PositionSignalTimeoutCount = 0;
 uint32_t PositionSignalTimeoutPeriod = 50;
+
+uint32_t Shiftdemandfeedback = 0;	//bit7 using to indicate to main loop from TIM1 ISR
+									//bit0~3 holds a error code
+									//	0: shift demand completed
+									//	1: CAN shift demand was blocked due to reported CAN position
 
 /* USER CODE END PV */
 
@@ -611,32 +619,54 @@ int main(void)
   while (1)
   {
 
-	  if (ActuatorPositionState & 0x01) //set when reported actuator position (over CAN) has changed or set by serial command "SC1" or CAN message timeout period expiring (TIM1 ISR)
+	  if((Shiftdemandfeedback & 0x80) != 0) //bit set once shift demand has been completed or terminated
 	  {
-			if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
-			{
+		  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+		  {
+			  //sprintf(tmpstr, "\e[6;12H\e[7;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
+			  sprintf(tmpstr, "\e[3;1H\e[KShift demand feedback:0x%01X", Shiftdemandfeedback & 0x0F);
+			  strcpy(tempstring, tmpstr);
 
-				if ((ActuatorPositionState & 0x02) == 0)
+			  uint16_t stringlength = strlen(tempstring);
+			  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+			  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+			  UartMsgSent = FLAG_SET;
+
+			  Shiftdemandfeedback = 0;
+
+		  }
+	  }
+
+
+	  if ((DedicatedShiftControl & 0x20) != 0) //see "RPC1" serial command, bit set by default
+	  {
+		  if (ActuatorPositionState & 0x01) //set when reported actuator position (over CAN) has changed or set by serial command "SC1" or CAN message timeout period expiring (TIM1 ISR)
+		  {
+				if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
 				{
-					//CAN position signal has not been received
-					//sprintf(tmpstr, "\e[6;12H\e[1;36;40mNO CAN POSITION SIGNAL\e[0m"); //set cyan text + reset attributes
-					sprintf(tmpstr, "\e[6;12H\e[7;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
-					strcpy(tempstring, tmpstr);
+
+					if ((ActuatorPositionState & 0x02) == 0)
+					{
+						//CAN position signal has not been received
+						//sprintf(tmpstr, "\e[6;12H\e[1;36;40mNO CAN POSITION SIGNAL\e[0m"); //set cyan text + reset attributes
+						sprintf(tmpstr, "\e[6;12H\e[7;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
+						strcpy(tempstring, tmpstr);
+					}
+					else
+					{
+						sprintf(tmpstr, "\e[6;12H\e[1;36;40m\e[KActuator pos:%d\e[0m", ActuatorPosition); //set cyan text + reset attributes
+						strcpy(tempstring, tmpstr);
+					}
+					uint16_t stringlength = strlen(tempstring);
+					//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+					HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+					UartMsgSent = FLAG_SET;
+
+
+					ActuatorPositionState = ActuatorPositionState & 0xFE; //reset control bit
 				}
-				else
-				{
-					sprintf(tmpstr, "\e[6;12H\e[1;36;40m\e[KActuator pos:%d\e[0m", ActuatorPosition); //set cyan text + reset attributes
-					strcpy(tempstring, tmpstr);
-				}
-				uint16_t stringlength = strlen(tempstring);
-				//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
-				HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
-				UartMsgSent = FLAG_SET;
 
-
-				ActuatorPositionState = ActuatorPositionState & 0xFE; //reset control bit
-			}
-
+		  }
 	  }
 
 	  if (CanAnalogScanState != 0) //function controlled by serial command "CASy"
@@ -2285,14 +2315,28 @@ int main(void)
 				  {
 					  //"CDN": CAN downshift
 					  //initiate CAN downshift with preload pulses
-					  ShiftDemand = 0x40;
-					  ShiftDemand = ShiftDemand | 0x01;
-					  //ShiftDemandPulse = 100; //set duration of shift demand pulse
-//					  PreloadPullActivationtime = 50;
-//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
-//					  PreloadPushActivationtime = 50;
-//					  PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  strcat(tmpstr, "CAN downshift");
+					  strcat(tempstring, tmpstr);
 
+					  if ((DedicatedShiftControl & 0xC0) == 0xC0)
+					  {
+						  ShiftDemand = 0x40;
+						  ShiftDemand = ShiftDemand | 0x01;
+						  //ShiftDemandPulse = 100; //set duration of shift demand pulse
+	//					  PreloadPullActivationtime = 50;
+	//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
+	//					  PreloadPushActivationtime = 50;
+	//					  PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
+					  }
+					  else
+					  {
+						  strcpy(tmpstr, " Unavailable!");
+						  strcat(tempstring, tmpstr);
+					  }
 					  recognisedstring = FLAG_SET;
 				  }
 
@@ -2383,14 +2427,29 @@ int main(void)
 				  {
 					  //"CUP": CAN upshift
 					  //initiate CAN up shift with preload pulses
-					  ShiftDemand = 0x80;
-					  ShiftDemand = ShiftDemand | 0x01;
-//					  ShiftDemandPulse = 100; //set duration of shift demand pulse
-//					  PreloadPullActivationtime = 50;
-//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
-//					  PreloadPushActivationtime = 50;
-//					  PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
 
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  strcat(tmpstr, "CAN upshift");
+					  strcat(tempstring, tmpstr);
+
+					  if ((DedicatedShiftControl & 0xC0) == 0xC0)
+					  {
+						  ShiftDemand = 0x80;
+						  ShiftDemand = ShiftDemand | 0x01;
+	//					  ShiftDemandPulse = 100; //set duration of shift demand pulse
+	//					  PreloadPullActivationtime = 50;
+	//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
+	//					  PreloadPushActivationtime = 50;
+	//					  PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
+					  }
+					  else
+					  {
+						  strcpy(tmpstr, " Unavailable!");
+						  strcat(tempstring, tmpstr);
+					  }
 					  recognisedstring = FLAG_SET;
 				  }
 
@@ -2400,13 +2459,31 @@ int main(void)
 				  {
 					  //"LDN": logic level downshift
 					  //initiate logic level down shift with preload pulses
-					  ShiftDemand = 0x20;
-					  ShiftDemand = ShiftDemand | 0x01;
-//					  ShiftDemandPulse = 100; //set duration of shift demand pulse
-//					  PreloadPullActivationtime = 50;
-//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
-//					  PreloadPushActivationtime = 50;
-//					  PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
+
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  strcat(tmpstr, "Logic level downshift");
+					  strcat(tempstring, tmpstr);
+
+					  if ((DedicatedShiftControl & 0x80) != 0)
+					  {
+						  ShiftDemand = 0x20;
+						  ShiftDemand = ShiftDemand | 0x01;
+	//					  ShiftDemandPulse = 100; //set duration of shift demand pulse
+	//					  PreloadPullActivationtime = 50;
+	//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
+	//					  PreloadPushActivationtime = 50;
+	//					  PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
+					  }
+					  else
+					  {
+						  strcpy(tmpstr, " Unavailable!");
+						  strcat(tempstring, tmpstr);
+					  }
+
+
 
 					  recognisedstring = FLAG_SET;
 				  }
@@ -2416,14 +2493,28 @@ int main(void)
 				  {
 					  //"LUP": logic level upshift
 					  //initiate logic level up shift with preload pulses
-					  ShiftDemand = 0x10;
-					  ShiftDemand = ShiftDemand | 0x01;
-//					  ShiftDemandPulse = 100; //set duration of shift demand pulse
-//					  PreloadPullActivationtime = 50;
-//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
-//					  PreloadPushActivationtime = 50;
-//					  PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  strcat(tmpstr, "Logic level upshift");
+					  strcat(tempstring, tmpstr);
 
+					  if ((DedicatedShiftControl & 0x80) != 0) //see serial command "SCx"
+					  {
+						  ShiftDemand = 0x10;
+						  ShiftDemand = ShiftDemand | 0x01;
+	//					  ShiftDemandPulse = 100; //set duration of shift demand pulse
+	//					  PreloadPullActivationtime = 50;
+	//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
+	//					  PreloadPushActivationtime = 50;
+	//					  PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
+					  }
+					  else
+					  {
+						  strcpy(tmpstr, " Unavailable!");
+						  strcat(tempstring, tmpstr);
+					  }
 					  recognisedstring = FLAG_SET;
 				  }
 
@@ -2609,7 +2700,7 @@ int main(void)
 					  recognisedstring = FLAG_SET;
 
 					  ShiftDemandCount = 0;
-					  ShiftDemand = 0x80;
+					  ShiftDemand = 0x40;
 					  ShiftDemand = ShiftDemand | 0x01;
 					  Multishift = 0x80;
 				  }
@@ -2631,7 +2722,7 @@ int main(void)
 					  recognisedstring = FLAG_SET;
 
 					  ShiftDemandCount = 0;
-					  ShiftDemand = 0x40;
+					  ShiftDemand = 0x80;
 					  ShiftDemand = ShiftDemand | 0x01;
 					  Multishift = 0x80;
 				  }
@@ -2640,44 +2731,109 @@ int main(void)
 				  if (comp == 0)
 				  {
 					  //"MLDN" Multiple logic level downshift sequence
-					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
-					  strcpy(tempstring, tmpstr);
-					  strcat(tempstring, "Multiple logic level down shifts");
+
 					  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
 					  strcat(tempstring, tmpstr);
 					  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 5th line, clear text,
 					  strcat(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, "Multiple logic level down shifts");
 
 					  sprintf(tmpstr, "\e[0m"); //reset all attributes
 					  strcat(tempstring, tmpstr);
 					  recognisedstring = FLAG_SET;
 
-					  ShiftDemandCount = 0;
-					  ShiftDemand = 0x10;
-					  ShiftDemand = ShiftDemand | 0x01;
-					  Multishift = 0x80;
+					  if ((DedicatedShiftControl & 0x80) != 0)
+					  {
+						  ShiftDemandCount = 0;
+						  ShiftDemand = 0x10;
+						  ShiftDemand = ShiftDemand | 0x01;
+						  Multishift = 0x80;
+					  }
+					  else
+					  {
+						  strcpy(tmpstr, " Unavailable!");
+						  strcat(tempstring, tmpstr);
+					  }
+
 				  }
 
 				  comp = strcmp(RxString, "MLUP");
 				  if (comp == 0)
 				  {
 					  //"MLUP" Multiple logic level upshift sequence
-					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
-					  strcpy(tempstring, tmpstr);
-					  strcat(tempstring, "Multiple logic level up shifts");
+
 					  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
 					  strcat(tempstring, tmpstr);
 					  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 5th line, clear text,
 					  strcat(tempstring, tmpstr);
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, "Multiple logic level up shifts");
 
 					  sprintf(tmpstr, "\e[0m"); //reset all attributes
 					  strcat(tempstring, tmpstr);
 					  recognisedstring = FLAG_SET;
 
-					  ShiftDemandCount = 0;
-					  ShiftDemand = 0x20;
-					  ShiftDemand = ShiftDemand | 0x01;
-					  Multishift = 0x80;
+
+					  if ((DedicatedShiftControl & 0x80) != 0)
+					  {
+						  ShiftDemandCount = 0;
+						  ShiftDemand = 0x20;
+						  ShiftDemand = ShiftDemand | 0x01;
+						  Multishift = 0x80;
+					  }
+					  else
+					  {
+						  strcpy(tmpstr, " Unavailable!");
+						  strcat(tempstring, tmpstr);
+					  }
+
+
+
+				  }
+
+				  comp = strncmp(RxString, "RPC", 3);
+				  if (comp == 0)
+				  {
+					  if (RxString[3] == '0')
+					  {
+						  //Serial command "RPC0": Disable reading of P1399 CAN position
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Shift control irrespective of CAN position");
+						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
+
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+
+						  DedicatedShiftControl = DedicatedShiftControl & 0xDF; //clear bit
+						  recognisedstring = FLAG_SET;
+					  }
+
+					  if (RxString[3] == '1')
+					  {
+						  //Serial command "RPC1": Enable reading of P1399 CAN position (enabled by default)
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Shift control based on reported CAN position");
+						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
+						  strcat(tempstring, tmpstr);
+
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+
+						  DedicatedShiftControl = DedicatedShiftControl | 0x20; //set bit
+						  ActuatorPositionState = ActuatorPositionState | 0x01; //update display with status
+						  recognisedstring = FLAG_SET;
+					  }
+
 				  }
 
 				  comp = strncmp(RxString, "SCC", 3);
@@ -3182,6 +3338,13 @@ int main(void)
 			  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
 			  UartMsgSent = FLAG_SET;
 
+
+			  //end of escape functions
+			  //update CAN position status
+			  if ((DedicatedShiftControl & 0x20) != 0) //see "RPC1" serial command, bit set by default
+			  {
+				  ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop code
+			  }
 			  RxState = RxState & 0xEF; //clear flag
 		  }
 	  }
@@ -3206,16 +3369,16 @@ int main(void)
 			  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 			  strcat(tempstring, tmpstr);
 
-			  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
+			  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
 			  strcat(tempstring, tmpstr);
 
-			  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 3rd line, clear text,
+			  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to  5th line, clear text,
 			  strcat(tempstring, tmpstr);
 
-			  sprintf(tmpstr, "\e[6;1H\e[K"); //move cursor to 3rd line, clear text,
+			  sprintf(tmpstr, "\e[6;1H\e[K"); //move cursor to  6th line, clear text,
 			  strcat(tempstring, tmpstr);
 
-			  sprintf(tmpstr, "\e[7;1H\e[K"); //move cursor to 3rd line, clear text,
+			  sprintf(tmpstr, "\e[7;1H\e[K"); //move cursor to  7th line, clear text,
 			  strcat(tempstring, tmpstr);
 
 			  uint16_t stringlength = strlen(tempstring);
@@ -3271,7 +3434,7 @@ int main(void)
 	  }
 
 
-	  if ((RxState & 0x02) != 0) //check for sewrial receive buffer overflow
+	  if ((RxState & 0x02) != 0) //check for serial receive buffer overflow
 	  {
 		  if (UartMsgSent == FLAG_CLEAR) //check previous serial data has been sent
 		  {
@@ -3355,8 +3518,17 @@ int main(void)
 
 					  __HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE); //re-enable receive interrupts
 
+					  strcpy(tempstring, "");
+					  if (recognisedstring == FLAG_CLEAR)
+					  {
+						  //clear 'unrecognised string' message
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcat(tempstring, tmpstr);
+						  recognisedstring = FLAG_SET; //set flag to prevent continuous clearing of screen line with each received new string character
+					  }
+
 					  sprintf(tmpstr, "\e[1;1H\e[K\e[1;33;40m"); //set cursor to line 1, clear existing data, set yellow background
-					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, tmpstr);
 					  strcat(tempstring, RxString);
 					  sprintf(tmpstr, "\e[0m"); //reset all attributes
 					  strcat(tempstring, tmpstr);
@@ -3933,20 +4105,44 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 				//test for repeated up-shifts
 				uint8_t InitiateShiftDemand = 0;
-				if ((ShiftDemand & 0xA0) != 0) //bits set by serial commands LUP,CUP, MLUP, MCUP,
+				if ((ActuatorPositionState & 0x02) != 0) //only enable shift demand if position feedback has been received
 				{
-					if (ActuatorPosition < PositionMaxLimit)
+					if ((ShiftDemand & 0xA0) != 0) //bits set by serial commands LUP,CUP, MLUP, MCUP,
 					{
-						InitiateShiftDemand = 1;
+						if (ActuatorPosition < PositionMaxLimit)
+						{
+							InitiateShiftDemand = 1;
+						}
+						else
+						{
+							Shiftdemandfeedback = Shiftdemandfeedback & 0xF0;
+							Shiftdemandfeedback = Shiftdemandfeedback | 0x01; 	//error 1
+							//Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
+						}
+
+					}
+					if ((ShiftDemand & 0x50) != 0) //bits set by serial commands "LDN", "CDN", "MLDN", "MCDN",
+					{
+						if (ActuatorPosition > PositionMinLimit)
+						{
+							InitiateShiftDemand = 1;
+						}
+
+						else
+						{
+							Shiftdemandfeedback = Shiftdemandfeedback & 0xF0;
+							Shiftdemandfeedback = Shiftdemandfeedback | 0x02; 	//error 2
+							//Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
+						}
 					}
 				}
-				if ((ShiftDemand & 0x50) != 0) //bits set by serial commands "LDN", "CDN", "MLDN", "MCDN",
+
+
+				if ((DedicatedShiftControl & 0x20) == 0) //see serial command "RPC0"
 				{
-					if (ActuatorPosition > PositionMinLimit)
-					{
-						InitiateShiftDemand = 1;
-					}
+					InitiateShiftDemand = 1;
 				}
+
 				if (InitiateShiftDemand == 1)
 				{
 					ShiftDemandPulseCount = ShiftDemandPulseTime;
@@ -3960,10 +4156,20 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 					ShiftDemand = ShiftDemand | 0x02; //advance state count
 				}
+
 				else
 				{
 					ShiftDemand = 0;
 					Multishift  = 0;
+
+					if ((Shiftdemandfeedback & 0x0F) == 0)
+					{
+						//Shiftdemandfeedback = Shiftdemandfeedback & 0xF0;
+						Shiftdemandfeedback = Shiftdemandfeedback | 0x03; 	//error 3
+
+					}
+					Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
+
 				}
 			}
 
@@ -4021,7 +4227,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				//apply CAN & logic level inactive shift demand signal states
 				HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_RESET);
 				HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_RESET);
-				if ((DedicatedShiftControl & 0x40) != 0)
+
+				if ((DedicatedShiftControl & 0x40) != 0) //see serial command "SCCx"
 				{
 					Errval = CanShiftDemand(0); //output inactive shift demand signal
 					if (Errval != 0)
@@ -4081,43 +4288,82 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				PreloadPushDemandCount--;
 				if (PreloadPushDemandCount == 0)
 				{
+					ShiftDemand = ShiftDemand & 0xF0;
+					ShiftDemand = ShiftDemand | 0x06; //advance state count
+
+
+//					//shift demand completed
+//					if (Multishift != 0)
+//					{
+//						ShiftDemand = ShiftDemand & 0xF0; //clear progress counter bits
+//
+//						if ((ActuatorPositionState & 0x02) != 0)
+//						{
+////							//test for repeated up-shifts
+////							if ((ShiftDemand & 0xA0) != 0)
+////							{
+////								if (ActuatorPosition < PositionMaxLimit)
+////								{
+////									ShiftDemand = ShiftDemand | 0x06; //advance state count
+////								}
+////								else
+////								{
+////									Multishift = 0; //disable multiple shifting
+////								}
+////							}
+////							//test for repeated down-shifts
+////							if ((ShiftDemand & 0x50) != 0)
+////							{
+////								if (ActuatorPosition > PositionMinLimit)
+////								{
+////									ShiftDemand = ShiftDemand | 0x06; //advance state count
+////								}
+////								else
+////								{
+////									Multishift = 0; //disable multiple shifting
+////								}
+////							}
+//						}
+//						else
+//						{
+//							if (ShiftDemandCount < 9)
+//							{
+//								ShiftDemand = ShiftDemand | 0x06; //advance state count
+//								ShiftDemandCount++;
+//							}
+//							else
+//							{
+//								Multishift = 0; //disable multiple shifting
+//							}
+//						}
+//
+//					}
+//					else
+//					{
+//						ShiftDemand = ShiftDemand & 0xF0;
+//
+//						Shiftdemandfeedback = Shiftdemandfeedback & 0xF0; //error 0
+//						Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
+//					}
+				}
+			}
+			else
+			{
+				//deactivate preload 'push' signal
+				HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_RESET);
+
+				if ((ShiftDemand & 0x0F) == 0x06)
+				{
 					//shift demand completed
 					if (Multishift != 0)
 					{
 						ShiftDemand = ShiftDemand & 0xF0; //clear progress counter bits
 
-						if ((ActuatorPositionState & 0x02) != 0)
-						{
-//							//test for repeated up-shifts
-//							if ((ShiftDemand & 0xA0) != 0)
-//							{
-//								if (ActuatorPosition < PositionMaxLimit)
-//								{
-//									ShiftDemand = ShiftDemand | 0x06; //advance state count
-//								}
-//								else
-//								{
-//									Multishift = 0; //disable multiple shifting
-//								}
-//							}
-//							//test for repeated down-shifts
-//							if ((ShiftDemand & 0x50) != 0)
-//							{
-//								if (ActuatorPosition > PositionMinLimit)
-//								{
-//									ShiftDemand = ShiftDemand | 0x06; //advance state count
-//								}
-//								else
-//								{
-//									Multishift = 0; //disable multiple shifting
-//								}
-//							}
-						}
-						else
+						if ((ActuatorPositionState & 0x02) == 0)
 						{
 							if (ShiftDemandCount < 9)
 							{
-								ShiftDemand = ShiftDemand | 0x06; //advance state count
+								//ShiftDemand = ShiftDemand | 0x07; //advance state count
 								ShiftDemandCount++;
 							}
 							else
@@ -4130,13 +4376,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 					else
 					{
 						ShiftDemand = ShiftDemand & 0xF0;
+
+						Shiftdemandfeedback = Shiftdemandfeedback & 0xF0; //error 0
+						Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
 					}
 				}
-			}
-			else
-			{
-				//deactivate preload 'push' signal
-				HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_RESET);
+
+
 			}
 
 			if (Multishift != 0)
@@ -4311,12 +4557,12 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 				ActuatorPosition = (CanRxData[4] & 0x03) << 8;
 				ActuatorPosition = ActuatorPosition | CanRxData[3];
 
-				if ((ActuatorPositionState & 0x02)== 0)
+				if ((ActuatorPositionState & 0x02) == 0)
 				{
 					ActuatorPositionState = ActuatorPositionState | 0x02; //record that an actuator message has been received
 					ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop to update displayed position
 				}
-				PositionSignalTimeoutCount = PositionSignalTimeoutPeriod; //value decremented by TIM1 ISR
+				PositionSignalTimeoutCount = PositionSignalTimeoutPeriod; //reset timeout periodf, value decremented by TIM1 ISR
 				if (ActuatorPosition != PrevActuatorPosition)
 				{
 					PrevActuatorPosition = ActuatorPosition;
