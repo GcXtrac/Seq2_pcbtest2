@@ -53,7 +53,7 @@
 #define CRCHAR 13	//Carriage return character
 
 #define PROJECTSTRING "Sequencer MkII V0.0.1"
-#define DATESTRING "9OCT2025"
+#define DATESTRING "17OCT2025"
 
 
 /* USER CODE END PD */
@@ -152,7 +152,7 @@ uint8_t ShiftDemand = 0;	//bit 7:set for CAN upshift
 
 
 
-uint16_t PreloadPullActivationtime = 50;
+
 uint16_t PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
 uint16_t PreloadPushActivationtime = 50;
 uint16_t PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
@@ -199,6 +199,7 @@ uint16_t PrevActuatorPosition = 0;
 uint16_t ActuatorPosition = 0;
 uint8_t ActuatorPositionState = 0; 	//bit0: indicates value has been updated used as a flag between CAN received ISR and main loop
 									//bit1: set if CAN position signal has been received, this value will be reset by TIM1 timepout period expiring.
+									//bit2: if actuator message 1 is to be processed
 
 uint32_t PositionSignalTimeoutCount = 0;
 uint32_t PositionSignalTimeoutPeriod = 50;
@@ -207,6 +208,32 @@ uint32_t Shiftdemandfeedback = 0;	//bit7 using to indicate to main loop from TIM
 									//bit0~3 holds a error code
 									//	0: shift demand completed
 									//	1: CAN shift demand was blocked due to reported CAN position
+
+
+
+
+uint8_t ActuatorMotorTemp = 0;
+uint8_t ActuatorPcbTemp = 0;
+uint8_t ActuatorMsg2State = 0; //bit flags:
+								//bit 7; indicate to main loop that the 2nd actuator message has been received, thius will be cleared if timeout period expires
+								//bit 6: actuator message 2 status has changed
+								//bit 5: set by command "AM2x"
+								//bit 4: set /cleared according to flash state
+								//bit 1: PCB temperature has changed
+								//bit 0: motor temperature has changed
+
+uint32_t ActuatorMsg2FlashCount = 0; //value is decremented by TIM1 ISR
+uint32_t ActuatorMsg2FlashTime = 250;
+
+uint32_t ActuatorMsg2Timeoutcount = 0; //reset message timeout period, value decremented by TIM 1 ISR
+uint32_t ActuatorMsg2TimeoutPeriod = 200;
+
+uint8_t PrevActuatorMotorTemp = 0;
+uint8_t PrevActuatorPcbTemp = 0;
+
+uint32_t ActuatorMsg1FlashCount = 0; //if value is set to non-zero then value will be decremented by TIM1 ISR
+uint32_t ActuatorMsg1FlashTime = 300;
+
 
 /* USER CODE END PV */
 
@@ -360,12 +387,7 @@ int main(void)
 								//0x11 received sequencer index specifies data that already exists
 								//0x20 problem storing sequencer command string.
 
-
 	 uint16_t MaxSequencerCycles = 0;
-
-
-
-
 
 	 uint8_t Timer1AnalogHeartbeat = 1;
 	 uint16_t ScanMsgCount = 0;
@@ -381,7 +403,7 @@ int main(void)
 	 pTempCanTxHeader->ExtId = 0x00;
 	 pTempCanTxHeader->TransmitGlobalTime = 0;
 
-
+	 uint8_t IoTestStatus = 0x00;	//bit 0 controls main loop IO test function see serial command "IOTx"
 
   /* USER CODE END 1 */
 
@@ -467,7 +489,7 @@ int main(void)
   pFilterConfig->FilterFIFOAssignment = CAN_FILTER_FIFO0;
   //pFilterConfig->FilterMaskIdHigh = 0x345u<<5;
   pFilterConfig->FilterMaskIdHigh = 0x567u<<5;
-  pFilterConfig->FilterMaskIdLow = 0x444u<<5;
+  pFilterConfig->FilterMaskIdLow = 0x354u<<5;
   pFilterConfig->FilterMode = CAN_FILTERMODE_IDLIST;
   pFilterConfig->FilterScale = CAN_FILTERSCALE_16BIT;
   //pFilterConfig->SlaveStartFilterBank = 0;
@@ -619,6 +641,67 @@ int main(void)
   while (1)
   {
 
+	  if ((ActuatorMsg2State & 0x20) != 0) //main control flag to enable processing of actuator msg 2 see serial command "AM2x"
+	  {
+		  if ((ActuatorMsg2State & 0x40) != 0) //test for actuator 2nd message status change
+		  {
+			  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+			  {
+				  strcpy(tempstring, "");
+				  if ((ActuatorMsg2State & 0x80) != 0) //test for actuator 2nd message received
+				  {
+					  //actuator 2nd message has been received
+					  strcpy(tempstring, "");
+					  if ((ActuatorMsg2State & 0x01) != 0)
+					  {
+
+						  sprintf(tmpstr, "\e[3;40H\e[K\e[1;36;40mMotor temp:%3ddegC\e[0m", ActuatorMotorTemp);
+						  strcat(tempstring, tmpstr);
+						  ActuatorMsg2State = ActuatorMsg2State & 0xFE; //reset control flag
+					  }
+
+					  if ((ActuatorMsg2State & 0x02) != 0)
+					  {
+						  sprintf(tmpstr, "\e[4;40H\e[K\e[1;36;40mPCB temp:%3ddegC\e[0m", ActuatorPcbTemp);
+						  strcat(tempstring, tmpstr);
+						  ActuatorMsg2State = ActuatorMsg2State & 0xFD; //reset control flag
+					  }
+				  }
+
+				  else
+				  {
+					  if ((ActuatorMsg2State & 0x10) == 0)
+					  {
+						  //sprintf(tmpstr, "\e[3;40H\e[K\e[7;37;41m-- NO CAN --\e[0m", ActuatorPcbTemp);
+						  sprintf(tmpstr, "\e[3;40H\e[K\e[7;31;47m-- NO CAN --\e[0m");
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "\e[4;40H\e[K\e[7;37;41m-- NO CAN --\e[0m");
+						  strcat(tempstring, tmpstr);
+						  ActuatorMsg2State = ActuatorMsg2State | 0x10; //set flag; update flash state flag
+					  }
+					  else
+					  {
+						  //sprintf(tmpstr, "\e[3;40H\e[K\e[7;37;41m-- NO CAN --\e[0m", ActuatorPcbTemp);
+						  sprintf(tmpstr, "\e[3;40H\e[K\e[1;31;47m-- NO CAN --\e[0m");
+						  strcat(tempstring, tmpstr);
+						  sprintf(tmpstr, "\e[4;40H\e[K\e[1;37;41m-- NO CAN --\e[0m");
+						  strcat(tempstring, tmpstr);
+						  ActuatorMsg2State = ActuatorMsg2State & 0xEF; //reset flag; update flash state flag
+					  }
+
+				  }
+				  ActuatorMsg2State = ActuatorMsg2State & 0xBF; //reset control flag
+
+				  uint16_t stringlength = strlen(tempstring);
+				  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+				  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+				  UartMsgSent = FLAG_SET;
+			  }
+		  }
+	  }
+
+
+
 	  if((Shiftdemandfeedback & 0x80) != 0) //bit set once shift demand has been completed or terminated
 	  {
 		  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
@@ -638,7 +721,7 @@ int main(void)
 	  }
 
 
-	  if ((DedicatedShiftControl & 0x20) != 0) //see "RPC1" serial command, bit set by default
+	  if ((ActuatorPositionState & 0x04) != 0) //see "AM1x" serial command, bit set by default
 	  {
 		  if (ActuatorPositionState & 0x01) //set when reported actuator position (over CAN) has changed or set by serial command "SC1" or CAN message timeout period expiring (TIM1 ISR)
 		  {
@@ -647,10 +730,20 @@ int main(void)
 
 					if ((ActuatorPositionState & 0x02) == 0)
 					{
-						//CAN position signal has not been received
-						//sprintf(tmpstr, "\e[6;12H\e[1;36;40mNO CAN POSITION SIGNAL\e[0m"); //set cyan text + reset attributes
-						sprintf(tmpstr, "\e[6;12H\e[7;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
-						strcpy(tempstring, tmpstr);
+						if ((ActuatorPositionState & 0x08) == 0)
+						{
+							//CAN position signal has not been received
+							//sprintf(tmpstr, "\e[6;12H\e[1;36;40mNO CAN POSITION SIGNAL\e[0m"); //set cyan text + reset attributes
+							sprintf(tmpstr, "\e[6;12H\e[7;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
+							strcpy(tempstring, tmpstr);
+							ActuatorPositionState = ActuatorPositionState | 0x08; //set message flash state
+						}
+						else
+						{
+							sprintf(tmpstr, "\e[6;12H\e[1;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
+							strcpy(tempstring, tmpstr);
+							ActuatorPositionState = ActuatorPositionState & 0xF7; //reset flag
+						}
 					}
 					else
 					{
@@ -676,10 +769,6 @@ int main(void)
 		  {
 			  //copy scan value to both CAN message and analogue outputs
 			  CanAnalogScanState = CanAnalogScanState & 0xFD; //reset output update bit
-
-
-
-
 
 			  HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_1, DAC_ALIGN_12B_R, (uint32_t)ScanValue);
 
@@ -2113,32 +2202,34 @@ int main(void)
 		  }
 
 
-
-		  if ((mainloopcount & 0x01) != 0)
+		  if (IoTestStatus == 0x01)
 		  {
-			  //exercise digital outputs
-			  HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_SET);
-			  HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_RESET);
-			  HAL_GPIO_WritePin(GPIOD, HSD_3_Pin, GPIO_PIN_SET);
-			  HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_RESET);
+			  if ((mainloopcount & 0x01) != 0)
+			  {
+				  //exercise digital outputs
+				  HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_SET);
+				  HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_RESET);
+				  HAL_GPIO_WritePin(GPIOD, HSD_3_Pin, GPIO_PIN_SET);
+				  HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_RESET);
 
-			  HAL_GPIO_WritePin(GPIOD, LSD_1_Pin, GPIO_PIN_SET);
-			  HAL_GPIO_WritePin(GPIOD, LSD_2_Pin, GPIO_PIN_RESET);
-			  HAL_GPIO_WritePin(GPIOD, LSD_3_Pin, GPIO_PIN_SET);
-			  HAL_GPIO_WritePin(GPIOD, LSD_4_Pin, GPIO_PIN_RESET);
-		  }
+				  HAL_GPIO_WritePin(GPIOD, LSD_1_Pin, GPIO_PIN_SET);
+				  HAL_GPIO_WritePin(GPIOD, LSD_2_Pin, GPIO_PIN_RESET);
+				  HAL_GPIO_WritePin(GPIOD, LSD_3_Pin, GPIO_PIN_SET);
+				  HAL_GPIO_WritePin(GPIOD, LSD_4_Pin, GPIO_PIN_RESET);
+			  }
 
-		  else
-		  {
-			  HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_RESET);
-			  HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_SET);
-			  HAL_GPIO_WritePin(GPIOD, HSD_3_Pin, GPIO_PIN_RESET);
-			  HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_SET);
+			  else
+			  {
+				  HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_RESET);
+				  HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_SET);
+				  HAL_GPIO_WritePin(GPIOD, HSD_3_Pin, GPIO_PIN_RESET);
+				  HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_SET);
 
-			  HAL_GPIO_WritePin(GPIOD, LSD_1_Pin, GPIO_PIN_RESET);
-			  HAL_GPIO_WritePin(GPIOD, LSD_2_Pin, GPIO_PIN_SET);
-			  HAL_GPIO_WritePin(GPIOD, LSD_3_Pin, GPIO_PIN_RESET);
-			  HAL_GPIO_WritePin(GPIOD, LSD_4_Pin, GPIO_PIN_SET);
+				  HAL_GPIO_WritePin(GPIOD, LSD_1_Pin, GPIO_PIN_RESET);
+				  HAL_GPIO_WritePin(GPIOD, LSD_2_Pin, GPIO_PIN_SET);
+				  HAL_GPIO_WritePin(GPIOD, LSD_3_Pin, GPIO_PIN_RESET);
+				  HAL_GPIO_WritePin(GPIOD, LSD_4_Pin, GPIO_PIN_SET);
+			  }
 		  }
 
 
@@ -2534,6 +2625,8 @@ int main(void)
 						  DedicatedShiftControl = DedicatedShiftControl | 0x80;
 						  ActuatorPositionState = 0x01; //initiate displaying of CANn actuator position
 
+						  ActuatorMsg2Timeoutcount = ActuatorMsg2TimeoutPeriod; //enable monitoring of actuator 2nd CAN message
+
 						  recognisedstring = FLAG_SET;
 					  }
 					  else
@@ -2599,6 +2692,64 @@ int main(void)
 
 			  if (commandlength == 4) //4 character command strings
 			  {
+
+
+
+
+				  comp = strncmp(RxString, "AM", 2); //"AM"
+				  if (comp == 0)
+				  {
+					  if (RxString[2] == '1')
+					  {
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Actuator message 1 processing ");
+
+						  if (RxString[3] == '1')
+						  {
+							  //"AM11": Enable processing of actuator messzage 2
+							  sprintf(tmpstr, "Enabled"); //move cursor to 3rd line, clear text,
+							  strcat(tempstring, tmpstr);
+							  ActuatorPositionState = ActuatorPositionState | 0x04;
+							  recognisedstring = FLAG_SET;
+						  }
+						  else
+						  {
+							  //"AM10": disable processing of actuator messzage 2
+							  sprintf(tmpstr, "Disabled"); //move cursor to 3rd line, clear text,
+							  strcat(tempstring, tmpstr);
+							  ActuatorPositionState = ActuatorPositionState & 0xFB;
+							  recognisedstring = FLAG_SET;
+						  }
+					  }
+
+
+					  if (RxString[2] == '2')
+					  {
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Actuator message 2 processing ");
+
+						  if (RxString[3] == '1')
+						  {
+							  //"AM21": Enable processing of actuator messzage 2
+							  sprintf(tmpstr, "Enabled"); //move cursor to 3rd line, clear text,
+							  strcat(tempstring, tmpstr);
+							  ActuatorMsg2State = 0x20;
+							  recognisedstring = FLAG_SET;
+						  }
+						  else
+						  {
+							  //"AM20": disable processing of actuator messzage 2
+							  sprintf(tmpstr, "Disabled"); //move cursor to 3rd line, clear text,
+							  strcat(tempstring, tmpstr);
+							  ActuatorMsg2State = 0;
+							  recognisedstring = FLAG_SET;
+						  }
+					  }
+				  }
+
+
 				  //comp = strcmp(RxString, "CAS"); //"CASy": CAN Analogue scan
 				  comp = strncmp(RxString, "CAS", 3); //"CASy": CAN Analogue scan
 				  if (comp == 0)
@@ -2680,6 +2831,38 @@ int main(void)
 					  recognisedstring = FLAG_SET;
 					  I2cReadBlockFunction = 1;
 					  screenblock = FLAG_SET; //prevent other main loop processed overwriting the screen
+				  }
+
+
+				  comp = strncmp(RxString, "IOT", 3); //"CASy": CAN Analogue scan
+				  if (comp == 0)
+				  {
+					  if (RxString[3] == '0')
+					  {
+						  //sprintf(tmpstr, "\e[3;1H\e[K\e[1;37;42m"); //move cursor to 3rd line, clear text, white text on green background
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "IO Test Disabled");
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+
+						  IoTestStatus = 0;
+						  recognisedstring = FLAG_SET;
+
+					  }
+					  if (RxString[3] == '1')
+					  {
+						  //sprintf(tmpstr, "\e[3;1H\e[K\e[1;37;42m"); //move cursor to 3rd line, clear text, white text on green background
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "IO Test Enabled");
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+
+						  IoTestStatus = 0x01;
+						  recognisedstring = FLAG_SET;
+
+					  }
 				  }
 
 
@@ -3001,7 +3184,7 @@ int main(void)
 			  }
 
 
-			  if (commandlength == 5)
+			  if (commandlength == 5) //5 character command strings
 			  {
 					comp = strncmp(RxString, "I2CA", 4); //I2CAx
 					if (comp == 0)
@@ -3025,7 +3208,7 @@ int main(void)
 			  }
 
 
-			  if (commandlength == 6)
+			  if (commandlength == 6)	//6 character command strings
 			  {
 
 				  comp = strncmp(RxString, "I2CD", 4); //I2CDxx
@@ -3119,7 +3302,234 @@ int main(void)
 						}
 				  }
 
+				  comp = strncmp(RxString, "SD", 2); //"SDxxxx"
+				  if (comp == 0)
+				  {
+					  //"SDxxxx": Set shift demand pulse width
+						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						strcat(tempstring, "Set shift demand pulse width: ");
+
+
+						uint32_t UserVal = 0;
+						UserVal = ExtractValueFromString(RxString, 2, 4);
+
+						if ((UserVal & 0x80000000) == 0)
+						{
+							//now convert ascii decimal string into hex
+							//uint32_t Bcd2Hex(uint32_t InputVal); //function to convert from BCD string into single Hex value
+							UserVal = Bcd2Hex(UserVal & 0xFFFF);
+
+
+							sprintf(tmpstr, "%4d", UserVal);
+							strcpy(tempstring, tmpstr);
+							ShiftDemandPulseTime = UserVal;
+
+						}
+						else
+						{
+							sprintf(tmpstr, "Data value invalid!\r\n");
+							strcat(tempstring, tmpstr);
+							//HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 100);
+						}
+
+						recognisedstring = FLAG_SET;
+
+
+						sprintf(tmpstr, "\e[0m"); //reset all attributes
+						strcat(tempstring, tmpstr);
+						recognisedstring = FLAG_SET;
+
+				  }
+
 			  }
+
+			  if (commandlength == 7)
+			  {
+				  comp = strncmp(RxString, "PP", 2); //PP
+				  if (comp == 0)
+				  {
+					  if (RxString[2] == 'A')
+					  {
+						  //"PPAxxxx": Set preload pull activation delay time
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Set Preload pull activation delay time: ");
+
+						  uint32_t UserVal = 0;
+						  UserVal = ExtractValueFromString(RxString, 3, 4);
+
+						  if ((UserVal & 0x80000000) == 0)
+						  {
+							  //now convert ascii decimal string into hex
+							  //uint32_t Bcd2Hex(uint32_t InputVal); //function to convert from BCD string into single Hex value
+							  UserVal = Bcd2Hex(UserVal & 0xFFFF);
+
+							  //function = UserVal & 0xFF;
+							  //functionRun = 1; //allow test function to execute within main loop
+
+							  sprintf(tmpstr, "%4d", UserVal);
+							  strcat(tempstring, tmpstr);
+							  PreloadPullActivationTime = UserVal;
+
+						  }
+						  else
+						  {
+							  sprintf(tmpstr, "Data value invalid!\r\n");
+							  strcat(tempstring, tmpstr);
+							  //HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 100);
+						  }
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+						  recognisedstring = FLAG_SET;
+
+					  }
+
+					  if (RxString[2] == 'B')
+					  {
+						  //"PPBxxxx": Set Prelaod pull pulse width
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Set Preload pull activation time: ");
+
+						  uint32_t UserVal = 0;
+						  UserVal = ExtractValueFromString(RxString, 3, 4);
+
+						  if ((UserVal & 0x80000000) == 0)
+						  {
+							  //now convert ascii decimal string into hex
+							  //uint32_t Bcd2Hex(uint32_t InputVal); //function to convert from BCD string into single Hex value
+							  UserVal = Bcd2Hex(UserVal & 0xFFFF);
+
+							  //function = UserVal & 0xFF;
+							  //functionRun = 1; //allow test function to execute within main loop
+
+							  sprintf(tmpstr, "%4d", UserVal);
+							  strcat(tempstring, tmpstr);
+							  PreloadPullDemandPulseTime = UserVal;
+
+						  }
+						  else
+						  {
+							  sprintf(tmpstr, "Data value invalid!\r\n");
+							  strcat(tempstring, tmpstr);
+							  //HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 100);
+						  }
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+						  recognisedstring = FLAG_SET;
+
+					  }
+
+					  if (RxString[2] == 'C')
+					  {
+						  //"PPCxxxx": Set Prelaod push activation delay time
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Set Preload push activation delay time: ");
+
+						  uint32_t UserVal = 0;
+						  UserVal = ExtractValueFromString(RxString, 3, 4);
+
+						  if ((UserVal & 0x80000000) == 0)
+						  {
+							  //now convert ascii decimal string into hex
+							  //uint32_t Bcd2Hex(uint32_t InputVal); //function to convert from BCD string into single Hex value
+							  UserVal = Bcd2Hex(UserVal & 0xFFFF);
+
+							  //function = UserVal & 0xFF;
+							  //functionRun = 1; //allow test function to execute within main loop
+
+							  sprintf(tmpstr, "%4d", UserVal);
+							  strcat(tempstring, tmpstr);
+							  PreloadPullActivationTime = UserVal;
+
+						  }
+						  else
+						  {
+							  sprintf(tmpstr, "Data value invalid!\r\n");
+							  strcat(tempstring, tmpstr);
+							  //HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 100);
+						  }
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+						  recognisedstring = FLAG_SET;
+
+					  }
+
+					  if (RxString[2] == 'D')
+					  {
+						  //"PPDxxxx": Set Preload push demand time
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Set Preload push activation pulse time: ");
+
+						  uint32_t UserVal = 0;
+						  UserVal = ExtractValueFromString(RxString, 3, 4);
+
+						  if ((UserVal & 0x80000000) == 0)
+						  {
+							  //now convert ascii decimal string into hex
+							  //uint32_t Bcd2Hex(uint32_t InputVal); //function to convert from BCD string into single Hex value
+							  UserVal = Bcd2Hex(UserVal & 0xFFFF);
+
+							  //function = UserVal & 0xFF;
+							  //functionRun = 1; //allow test function to execute within main loop
+
+							  sprintf(tmpstr, "%4d", UserVal);
+							  strcat(tempstring, tmpstr);
+							  PreloadPushDemandPulseTime = UserVal;
+
+						  }
+						  else
+						  {
+							  sprintf(tmpstr, "Data value invalid!\r\n");
+							  strcat(tempstring, tmpstr);
+							  //HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 100);
+						  }
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+						  recognisedstring = FLAG_SET;
+
+					  }
+				  }
+				  comp = strncmp(RxString, "RSD", 3); //RSD
+				  if (comp == 0)
+				  {
+					  //"RSDxxxx": Repeat shift demand delay time
+					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+					  strcpy(tempstring, tmpstr);
+					  strcat(tempstring, "Set repeat shift demand delay time: ");
+
+					  uint32_t UserVal = 0;
+					  UserVal = ExtractValueFromString(RxString, 3, 4);
+
+					  if ((UserVal & 0x80000000) == 0)
+					  {
+						  //now convert ascii decimal string into hex
+						  //uint32_t Bcd2Hex(uint32_t InputVal); //function to convert from BCD string into single Hex value
+						  UserVal = Bcd2Hex(UserVal & 0xFFFF);
+
+						  //function = UserVal & 0xFF;
+						  //functionRun = 1; //allow test function to execute within main loop
+
+						  sprintf(tmpstr, "0x%4d", UserVal);
+						  strcpy(tempstring, tmpstr);
+						  Shift2ShiftTime = UserVal;
+
+					  }
+					  else
+					  {
+						  sprintf(tmpstr, "Data value invalid!\r\n");
+						  strcat(tempstring, tmpstr);
+						  //HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 100);
+					  }
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  recognisedstring = FLAG_SET;
+				  }
+			  }
+
 
 			  if (commandlength == 8)
 			  {
@@ -3251,12 +3661,11 @@ int main(void)
 			  }
 
 
-			  if (commandlength == 10)
+			  if (commandlength == 10) //test for 10 char
 			  {
 				  comp = strncmp(RxString, "I2CW", 4); //I2CWaaaadd
 				  if (comp == 0)
 				  {
-
 						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 						strcpy(tempstring, tmpstr);
 						strcat(tempstring, "Write single byte to I2C");
@@ -3330,7 +3739,7 @@ int main(void)
 		  {
 			  //clear ECSAPE message from VT100 screen
 			  //char tmpstr[20] = "";
-			  sprintf(tmpstr, "\e[2;1H\e[K"); //move cursor to 2nd line, white text on red background
+			  sprintf(tmpstr, "\e[2;1H\e[K"); //move cursor to 2nd line, clear
 			  strcpy(tempstring, tmpstr);
 
 			  uint16_t stringlength = strlen(tempstring);
@@ -3339,12 +3748,22 @@ int main(void)
 			  UartMsgSent = FLAG_SET;
 
 
-			  //end of escape functions
+			  //End of escape functions
 			  //update CAN position status
 			  if ((DedicatedShiftControl & 0x20) != 0) //see "RPC1" serial command, bit set by default
 			  {
 				  ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop code
 			  }
+
+			  if ((ActuatorMsg2State & 0x20) != 0)
+			  {
+				  //prepare to update screen with actuator message 2 data
+				  ActuatorMsg2State = ActuatorMsg2State | 0x01;
+				  ActuatorMsg2State = ActuatorMsg2State | 0x02;
+				  ActuatorMsg2State = ActuatorMsg2State | 0x40; //flag to main loop to update display
+
+			  }
+
 			  RxState = RxState & 0xEF; //clear flag
 		  }
 	  }
@@ -4072,7 +4491,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 //		 	 	 	 	 	 	 	 //bit 5: set for logic level upshift
 //		 	 	 	 	 	 	 	 //bit 4: set for logic level downshift
 //		 uint16_t ShiftDemandPulse = 100; //set duration of shift demand pulse
-//		 uint16_t PreloadPullActivationtime = 50;
+
 //		 uint16_t PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
 //		 uint16_t PreloadPushActivationtime = 50;
 //		 uint16_t PreloadPushDemandPulse = 100; //sets duration of preload push demand pulse
@@ -4087,6 +4506,40 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		//uint16_t PreloadPushDemandPulseTime = 100;
 		//uint16_t PreloadPushDemandCount = 0;
 
+		if (ActuatorMsg1FlashCount != 0)
+		{
+			ActuatorMsg1FlashCount--;
+			if (ActuatorMsg1FlashCount == 0)
+			{
+				ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop  to update display
+				ActuatorMsg1FlashCount = ActuatorMsg1FlashTime;
+			}
+		}
+
+		if (ActuatorMsg2FlashCount != 0)
+		{
+			ActuatorMsg2FlashCount--;
+			if (ActuatorMsg2FlashCount == 0)
+			{
+				ActuatorMsg2State = ActuatorMsg2State | 0x40; //update display
+				ActuatorMsg2FlashCount = ActuatorMsg2FlashTime; //reset flash period
+			}
+		}
+
+
+		if (ActuatorMsg2Timeoutcount != 0)
+		{
+			ActuatorMsg2Timeoutcount--;
+			if (ActuatorMsg2Timeoutcount == 0)
+			{
+				ActuatorMsg2State = ActuatorMsg2State & 0x7F; //reset flag - signal to main loop that actuator 2nd message hasn't been received recently
+				ActuatorMsg2State = ActuatorMsg2State | 0x40; //indicate to main loop that message status has changed
+				ActuatorMsg2FlashCount = ActuatorMsg2FlashTime; //value decremented by TIM1 ISR
+			}
+		}
+
+
+
 		if (PositionSignalTimeoutCount != 0)
 		{
 			PositionSignalTimeoutCount--;
@@ -4094,6 +4547,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			{
 				ActuatorPositionState = ActuatorPositionState & 0xFD; //reset status flag
 				ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop to update display
+
+				ActuatorMsg1FlashCount = ActuatorMsg1FlashTime; //value decremented by TIM1 ISR
 			}
 		}
 
@@ -4474,7 +4929,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			}
 		}
 
-		DecrementI2cTiming(); //Used as timout period for I2C comms
+		DecrementI2cTiming(); //Used as timeout period for I2C comms
 
 	}
 }
@@ -4561,8 +5016,11 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 				{
 					ActuatorPositionState = ActuatorPositionState | 0x02; //record that an actuator message has been received
 					ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop to update displayed position
+
+					ActuatorPositionState = ActuatorPositionState & 0xF7; //reset flash state flag
+					ActuatorMsg1FlashCount = 0;								//prevent message flashing
 				}
-				PositionSignalTimeoutCount = PositionSignalTimeoutPeriod; //reset timeout periodf, value decremented by TIM1 ISR
+				PositionSignalTimeoutCount = PositionSignalTimeoutPeriod; //reset timeout period, value decremented by TIM1 ISR
 				if (ActuatorPosition != PrevActuatorPosition)
 				{
 					PrevActuatorPosition = ActuatorPosition;
@@ -4571,6 +5029,38 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 				}
 			}
 
+			if (pCanRxHeader->StdId == 0x354)
+			{
+				//obtain actuator temperatures
+				ActuatorMotorTemp = CanRxData[0];
+				ActuatorPcbTemp = CanRxData[1];
+				if ((ActuatorMsg2State & 0x80) == 0)
+				{
+					ActuatorMsg2State = ActuatorMsg2State | 0x80; 	//indicate to main loop that the 2nd actuator message has been received, this will be cleared if timeout period expires
+					ActuatorMsg2State = ActuatorMsg2State | 0x01;	//flag to main loop that value has changed - force update
+					ActuatorMsg2State = ActuatorMsg2State | 0x02;	//flag to main loop that value has changed - force update
+					ActuatorMsg2State = ActuatorMsg2State | 0x40; 	//prepare to update display
+
+					ActuatorMsg2State = ActuatorMsg2State & 0xEF;	//reset flash state flag
+					ActuatorMsg2FlashCount = 0;						//prevent message flashing
+				}
+
+
+				ActuatorMsg2Timeoutcount = ActuatorMsg2TimeoutPeriod; //reset message timeout period, value decremented by TIM 1 ISR
+				if (ActuatorMotorTemp != PrevActuatorMotorTemp)
+				{
+					PrevActuatorMotorTemp = ActuatorMotorTemp;
+					ActuatorMsg2State = ActuatorMsg2State | 0x01;	//flag to main loop that value has changed
+					ActuatorMsg2State = ActuatorMsg2State | 0x40; 	//prepare to update display
+				}
+
+				if (ActuatorPcbTemp != PrevActuatorPcbTemp)
+				{
+					PrevActuatorPcbTemp = ActuatorPcbTemp;
+					ActuatorMsg2State = ActuatorMsg2State | 0x02;	//flag to main loop that value has changed
+					ActuatorMsg2State = ActuatorMsg2State | 0x40; 	//prepare to update display
+				}
+			}
 			reccount++;
 
 		}
