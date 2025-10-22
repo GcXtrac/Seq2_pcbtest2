@@ -53,7 +53,9 @@
 #define CRCHAR 13	//Carriage return character
 
 #define PROJECTSTRING "Sequencer MkII V0.0.1"
-#define DATESTRING "17OCT2025"
+#define DATESTRING "22OCT2025"
+
+
 
 
 /* USER CODE END PD */
@@ -199,7 +201,8 @@ uint16_t PrevActuatorPosition = 0;
 uint16_t ActuatorPosition = 0;
 uint8_t ActuatorPositionState = 0; 	//bit0: indicates value has been updated used as a flag between CAN received ISR and main loop
 									//bit1: set if CAN position signal has been received, this value will be reset by TIM1 timepout period expiring.
-									//bit2: if actuator message 1 is to be processed
+									//bit2: if actuator message 1 is to be processed (see serial command "AM1x"
+									//bit3: actuator message flash state
 
 uint32_t PositionSignalTimeoutCount = 0;
 uint32_t PositionSignalTimeoutPeriod = 50;
@@ -223,7 +226,7 @@ uint8_t ActuatorMsg2State = 0; //bit flags:
 								//bit 0: motor temperature has changed
 
 uint32_t ActuatorMsg2FlashCount = 0; //value is decremented by TIM1 ISR
-uint32_t ActuatorMsg2FlashTime = 250;
+uint32_t ActuatorMsg2FlashTime = 350;
 
 uint32_t ActuatorMsg2Timeoutcount = 0; //reset message timeout period, value decremented by TIM 1 ISR
 uint32_t ActuatorMsg2TimeoutPeriod = 200;
@@ -233,6 +236,14 @@ uint8_t PrevActuatorPcbTemp = 0;
 
 uint32_t ActuatorMsg1FlashCount = 0; //if value is set to non-zero then value will be decremented by TIM1 ISR
 uint32_t ActuatorMsg1FlashTime = 300;
+
+static uint8_t ProcessIndex = 0; 	//main loop process pointer
+									//1: Shift demand configuration help function
+
+static uint8_t ProcessCount = 0;	//counter used to determine position within a main loop process
+
+char tmpstr[200] = "";
+char tempstring[200] = "";
 
 
 /* USER CODE END PV */
@@ -249,10 +260,219 @@ static void MX_USART3_UART_Init(void);
 static void MX_I2C2_Init(void);
 /* USER CODE BEGIN PFP */
 
+//Function prototypes
+void tempfunction(void);
+void MainLoopProcess01(void);
+void MainLoopProcess02(void);
+uint8_t CanShiftDemand(uint8_t direction);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+void tempfunction(void)
+{
+	ProcessCount = 50;
+}
+
+
+void MainLoopProcess02(void)
+{
+	//Created 22OCT2025
+	//Last edited 22OCT2025
+	//Function used by mainloop to output serial commands
+	//See serial command "?"
+	if (ProcessIndex == 0x02)
+	{
+		if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+		{
+			strcpy(tempstring, "");
+			switch(ProcessCount)
+			{
+				case(0):
+					  sprintf(tmpstr, "\e[2J\e[H"); //clear screen and home cursor
+					  strcpy(tempstring, tmpstr);
+					  strcpy(tmpstr, "Serial commands");
+					  strcat(tempstring, tmpstr);
+
+					  strcat(tempstring, "\e[2:1H"); //move cursor to 1st line, clear text,
+					  strcat(tempstring, "\tSCx: Sequenced Shift demand control");
+					  strcat(tempstring, "\e[3:1H"); //move cursor to 2nd line, clear text,
+					  strcat(tempstring, "\tSCCx: Sequenced CAN Shift demand control");
+					  break;
+
+				case(1):
+					  strcpy(tempstring, "\e[4:1H"); //move cursor to 3th line, clear text,
+					  strcat(tempstring, "\tSDxxxx: Shift demand pulse width");
+					  strcat(tempstring, "\e[5:1H"); //move cursor to 4th line, clear text,
+					  strcat(tempstring, "\tPPAxxxx: Preload Pull activation delay (msec)");
+					  break;
+
+				case(2):
+					  strcpy(tempstring, "\e[6:1H"); //move cursor to 5th line, clear text,
+					  strcat(tempstring, "\tPPBxxxx: Preload Pull demand pulse width");
+					  strcat(tempstring, "\e[7:1H"); //move cursor to 6th line, clear text,
+					  strcat(tempstring, "\tPPCxxxx: Preload Push activation delay (msec)");
+					  break;
+
+				case(3):
+					  strcpy(tempstring, "\e[8:1H"); //move cursor to 7th line, clear text,
+					  strcat(tempstring, "\tPPDxxxx: Preload Push demand pulse wisth (msec)");
+					  strcpy(tempstring, "\e9:1H"); //move cursor to 8th line, clear text,
+					  strcat(tempstring, "\tRPCx: Utilise reported CAN position signal");
+					  break;
+
+				case(4):
+					  strcpy(tempstring, "\e[10:1H"); //move cursor to 9th line, clear text,
+					  strcat(tempstring, "\tAM1x: Actuator CAN message 1 processing");
+					  strcat(tempstring, "\e[11:1H"); //move cursor to 10th line, clear text,
+					  strcat(tempstring, "\tAM2x: Actuator CAN message 2 processing");
+					  break;
+
+
+				case(5):
+					  strcpy(tempstring, "\e[12:1H"); //move cursor to 11th line, clear text,
+					  strcat(tempstring, "\tRSDxxxx: set multiple shift-shift delay time (msec)");
+					  break;
+
+				default:
+
+			}
+			uint16_t stringlength = strlen(tempstring);
+			if (stringlength != 0)
+			{
+				//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+				HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+				UartMsgSent = FLAG_SET;
+			}
+
+			ProcessCount++;
+			if (ProcessCount > 10)
+			{
+			  ProcessIndex = 0; //disable main loop process
+			}
+		}
+	}
+
+}
+
+void MainLoopProcess01(void)
+{
+	//Created 22OCT2025
+	//Last edited 22OCT2025
+	//Main loop process 01. This function is called by the main loop but triggered by serial command "SD?"
+	//Designed to display actuator shift demand configuration info on the display
+	//Makes use of global variables!!!
+
+	//char tmpstr[200] = ""; //can't use local variables here as the data needs to exist after the function has been executed!!!
+	//char tempstring[200] = "";
+
+	if (ProcessIndex == 0x01)
+	{
+		if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+		{
+			strcpy(tempstring, "");
+			switch(ProcessCount)
+			{
+			case(0):
+				  //sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+				  sprintf(tmpstr, "\e[2j;\e[H"); //clear screen and home cursor
+				  strcpy(tempstring, tmpstr);
+				  strcpy(tmpstr, "Shift demand sequencing configuration");
+				  strcat(tempstring, tmpstr);
+
+				  strcat(tempstring, "\e[4:1H\e[K"); //move cursor to 4th line, clear text,
+				  strcat(tempstring, "\tShift Sequencing: ");
+				  if ((DedicatedShiftControl & 0x80) != 0) //see serial command "SCx"
+				  {
+					  strcat(tempstring, "Enabled");
+				  }
+				  else
+				  {
+					  strcat(tempstring, "Disabled");
+				  }
+				  break;
+
+			case(1):
+				  strcpy(tempstring, "\e[5:1H\e[K"); //move cursor to 5th line, clear text,
+				  strcat(tempstring, "\tCAN Shift Sequencing: ");
+				  if ((DedicatedShiftControl & 0x40) != 0) //see serial command "SCCx"
+				  {
+					  strcat(tempstring, "Enabled");
+				  }
+				  else
+				  {
+					  strcat(tempstring, "Disabled");
+				  }
+				  break;
+
+			case(2):
+				  strcpy(tempstring, "\e[6:1H"); //move cursor to 6th line, clear text,
+				  sprintf(tmpstr, "\tShift demand pulse width: %4dmsec", ShiftDemandPulseTime);
+				  strcat(tempstring,tmpstr);
+
+				  strcat(tempstring, "\e[7:1H"); //move cursor to 7th line, clear text,
+				  sprintf(tmpstr, "\tPreload pull activation delay: %4dmsec", PreloadPullActivationTime); //PPAxxxx
+				  strcat(tempstring,tmpstr);
+				  break;
+
+			case(3):
+				  strcat(tempstring, "\e[8:1H"); //move cursor to 8th line, clear text,
+				  sprintf(tmpstr, "\tPreload pull demand pulse: %4dmsec", PreloadPullDemandPulseTime); //PPBxxxx
+				  strcat(tempstring,tmpstr);
+
+				  strcat(tempstring, "\e[9:1H"); //move cursor to 9th line, clear text,
+				  sprintf(tmpstr, "\tPreload push activation delay: %4dmsec", PreloadPushActivationTime); //PPCxxxx
+				  strcat(tempstring,tmpstr);
+				  break;
+
+			case(4):
+				  strcat(tempstring, "\e[10:1H"); //move cursor to 10th line, clear text,
+				  sprintf(tmpstr, "\tPreload push demand pulse: %4dmsec", PreloadPushDemandPulseTime); //PPDxxxx
+				  strcat(tempstring,tmpstr);
+				  break;
+
+			case(5):
+				  strcpy(tempstring, "\e[11:1H"); //move cursor to 11th line, clear text,
+				  strcat(tempstring, "\tUse CAN position: ");
+				  if ((DedicatedShiftControl & 0x20) != 0) //see serial command "RPCx"
+				  {
+					  strcat(tempstring, "Enabled");
+				  }
+				  else
+				  {
+					  strcat(tempstring, "Disabled");
+				  }
+				  break;
+
+			case(6):
+				  strcat(tempstring, "\e[12:1H"); //move cursor to 10th line, clear text,
+				  sprintf(tmpstr, "\tMultiple shift-shift delay: %4dmsec", Shift2ShiftTime); //RSDxxxx
+				  strcat(tempstring,tmpstr);
+				  break;
+
+			default:
+			}
+
+			uint16_t stringlength = strlen(tempstring);
+			if (stringlength != 0)
+			{
+				//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+				HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+				UartMsgSent = FLAG_SET;
+			}
+
+			ProcessCount++;
+			if (ProcessCount > 10)
+			{
+			  ProcessIndex = 0; //disable main loop process
+			}
+		}
+	}
+}
+
+
 uint8_t CanShiftDemand(uint8_t direction)
 {
 	//Used by sequenced shift demand functions
@@ -330,8 +550,8 @@ int main(void)
 	uint8_t RxStringLen = 0;
 	uint16_t RxReadPtr = 0;
 
-	char tmpstr[200] = "";
-	char tempstring[200] = "";
+	//char tmpstr[200] = "";
+	//char tempstring[200] = "";
 
 
 	uint16_t CanIdentifier = 0;
@@ -342,15 +562,18 @@ int main(void)
 
 	uint8_t candatacount = 0;
 
-	uint8_t ProcessRececivedCanData = FLAG_CLEAR;
+	uint8_t ProcessReceivedCanData = FLAG_CLEAR;
 
 	uint8_t I2cInitialisationFunction = 0;
 	uint8_t I2cReadBlockFunction = 0; //Main loop function controlling variable
 
 	uint8_t recognisedstring = FLAG_CLEAR;
+	uint8_t prevcommandstringstate = FLAG_CLEAR;
 
 	uint32_t UserVal = 0;
 	uint8_t screenblock = FLAG_CLEAR;
+
+
 
 	uint8_t processloopcount = 0;
 	uint8_t Xmodempoacketcount = 0;
@@ -404,6 +627,9 @@ int main(void)
 	 pTempCanTxHeader->TransmitGlobalTime = 0;
 
 	 uint8_t IoTestStatus = 0x00;	//bit 0 controls main loop IO test function see serial command "IOTx"
+
+
+	 tempfunction();
 
   /* USER CODE END 1 */
 
@@ -641,124 +867,136 @@ int main(void)
   while (1)
   {
 
-	  if ((ActuatorMsg2State & 0x20) != 0) //main control flag to enable processing of actuator msg 2 see serial command "AM2x"
+	  MainLoopProcess01(); //see serial command "SD?"
+	  MainLoopProcess02(); //see serial command "?"
+
+
+	//Test for Main loop display update
+	  if (screenblock == FLAG_CLEAR) //flag is cleared to prevent automatic/ period screen updates
+		  	  	  	  	  	  	  	  	//flag is cleared by 'escape' character
 	  {
-		  if ((ActuatorMsg2State & 0x40) != 0) //test for actuator 2nd message status change
+		  if ((ActuatorMsg2State & 0x20) != 0) //main control flag to enable processing of actuator msg 2 see serial command "AM2x"
+		  {
+			  if ((ActuatorMsg2State & 0x40) != 0) //test for actuator 2nd message status change
+			  {
+				  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+				  {
+					  strcpy(tempstring, "");
+					  if ((ActuatorMsg2State & 0x80) != 0) //test for actuator 2nd message received
+					  {
+						  //actuator 2nd message has been received
+						  strcpy(tempstring, "");
+						  if ((ActuatorMsg2State & 0x01) != 0)
+						  {
+
+							  sprintf(tmpstr, "\e[3;60H\e[K\e[1;36;40mMotor temp:%3ddegC\e[0m", ActuatorMotorTemp);
+							  strcat(tempstring, tmpstr);
+							  ActuatorMsg2State = ActuatorMsg2State & 0xFE; //reset control flag
+						  }
+
+						  if ((ActuatorMsg2State & 0x02) != 0)
+						  {
+							  sprintf(tmpstr, "\e[4;60H\e[K\e[1;36;40mPCB temp:%3ddegC\e[0m", ActuatorPcbTemp);
+							  strcat(tempstring, tmpstr);
+							  ActuatorMsg2State = ActuatorMsg2State & 0xFD; //reset control flag
+						  }
+					  }
+
+					  else
+					  {
+						  if ((ActuatorMsg2State & 0x10) == 0)
+						  {
+							  //sprintf(tmpstr, "\e[3;40H\e[K\e[7;37;41m-- NO CAN --\e[0m", ActuatorPcbTemp);
+							  //sprintf(tmpstr, "\e[3;60H\e[K\e[7;31;47m-- NO CAN --\e[0m");
+							  sprintf(tmpstr, "\e[3;60H\e[K\e[1;31;40m-- NO CAN 1-\e[0m"); //RED text, BLK Background
+							  strcat(tempstring, tmpstr);
+							  //sprintf(tmpstr, "\e[4;40H\e[K\e[7;37;41m-- NO CAN --\e[0m");
+							  sprintf(tmpstr, "\e[4;60H\e[K\e[7;37;43m-- NO CAN 2-\e[0m");
+							  strcat(tempstring, tmpstr);
+							  ActuatorMsg2State = ActuatorMsg2State | 0x10; //set flag; update flash state flag
+						  }
+						  else
+						  {
+							  //sprintf(tmpstr, "\e[3;40H\e[K\e[7;37;41m-- NO CAN --\e[0m", ActuatorPcbTemp);
+							  //sprintf(tmpstr, "\e[3;60H\e[K\e[1;31;47m-- NO CAN --\e[0m");
+							  sprintf(tmpstr, "\e[3;60H\e[K\e[1;37;41m-- NO CAN 3-\e[0m"); //WHI text, RED Background
+							  strcat(tempstring, tmpstr);
+							  sprintf(tmpstr, "\e[4;60H\e[K\e[1;37;41m-- NO CAN 4-\e[0m");
+							  strcat(tempstring, tmpstr);
+							  ActuatorMsg2State = ActuatorMsg2State & 0xEF; //reset flag; update flash state flag
+						  }
+
+					  }
+					  ActuatorMsg2State = ActuatorMsg2State & 0xBF; //reset control flag
+
+					  uint16_t stringlength = strlen(tempstring);
+					  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+					  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+					  UartMsgSent = FLAG_SET;
+				  }
+			  }
+		  }
+
+
+
+		  if((Shiftdemandfeedback & 0x80) != 0) //bit set once shift demand has been completed or terminated
 		  {
 			  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
 			  {
-				  strcpy(tempstring, "");
-				  if ((ActuatorMsg2State & 0x80) != 0) //test for actuator 2nd message received
-				  {
-					  //actuator 2nd message has been received
-					  strcpy(tempstring, "");
-					  if ((ActuatorMsg2State & 0x01) != 0)
-					  {
-
-						  sprintf(tmpstr, "\e[3;40H\e[K\e[1;36;40mMotor temp:%3ddegC\e[0m", ActuatorMotorTemp);
-						  strcat(tempstring, tmpstr);
-						  ActuatorMsg2State = ActuatorMsg2State & 0xFE; //reset control flag
-					  }
-
-					  if ((ActuatorMsg2State & 0x02) != 0)
-					  {
-						  sprintf(tmpstr, "\e[4;40H\e[K\e[1;36;40mPCB temp:%3ddegC\e[0m", ActuatorPcbTemp);
-						  strcat(tempstring, tmpstr);
-						  ActuatorMsg2State = ActuatorMsg2State & 0xFD; //reset control flag
-					  }
-				  }
-
-				  else
-				  {
-					  if ((ActuatorMsg2State & 0x10) == 0)
-					  {
-						  //sprintf(tmpstr, "\e[3;40H\e[K\e[7;37;41m-- NO CAN --\e[0m", ActuatorPcbTemp);
-						  sprintf(tmpstr, "\e[3;40H\e[K\e[7;31;47m-- NO CAN --\e[0m");
-						  strcat(tempstring, tmpstr);
-						  sprintf(tmpstr, "\e[4;40H\e[K\e[7;37;41m-- NO CAN --\e[0m");
-						  strcat(tempstring, tmpstr);
-						  ActuatorMsg2State = ActuatorMsg2State | 0x10; //set flag; update flash state flag
-					  }
-					  else
-					  {
-						  //sprintf(tmpstr, "\e[3;40H\e[K\e[7;37;41m-- NO CAN --\e[0m", ActuatorPcbTemp);
-						  sprintf(tmpstr, "\e[3;40H\e[K\e[1;31;47m-- NO CAN --\e[0m");
-						  strcat(tempstring, tmpstr);
-						  sprintf(tmpstr, "\e[4;40H\e[K\e[1;37;41m-- NO CAN --\e[0m");
-						  strcat(tempstring, tmpstr);
-						  ActuatorMsg2State = ActuatorMsg2State & 0xEF; //reset flag; update flash state flag
-					  }
-
-				  }
-				  ActuatorMsg2State = ActuatorMsg2State & 0xBF; //reset control flag
+				  //sprintf(tmpstr, "\e[6;12H\e[7;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
+				  sprintf(tmpstr, "\e[3;1H\e[KShift demand feedback:0x%01lX", Shiftdemandfeedback & 0x0F);
+				  strcpy(tempstring, tmpstr);
 
 				  uint16_t stringlength = strlen(tempstring);
 				  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
 				  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
 				  UartMsgSent = FLAG_SET;
+
+				  Shiftdemandfeedback = 0;
+
 			  }
 		  }
-	  }
 
 
-
-	  if((Shiftdemandfeedback & 0x80) != 0) //bit set once shift demand has been completed or terminated
-	  {
-		  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
+		  if ((ActuatorPositionState & 0x04) != 0) //see "AM1x" serial command, bit set by default
 		  {
-			  //sprintf(tmpstr, "\e[6;12H\e[7;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
-			  sprintf(tmpstr, "\e[3;1H\e[KShift demand feedback:0x%01X", Shiftdemandfeedback & 0x0F);
-			  strcpy(tempstring, tmpstr);
-
-			  uint16_t stringlength = strlen(tempstring);
-			  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
-			  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
-			  UartMsgSent = FLAG_SET;
-
-			  Shiftdemandfeedback = 0;
-
-		  }
-	  }
-
-
-	  if ((ActuatorPositionState & 0x04) != 0) //see "AM1x" serial command, bit set by default
-	  {
-		  if (ActuatorPositionState & 0x01) //set when reported actuator position (over CAN) has changed or set by serial command "SC1" or CAN message timeout period expiring (TIM1 ISR)
-		  {
-				if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
-				{
-
-					if ((ActuatorPositionState & 0x02) == 0)
+			  if (ActuatorPositionState & 0x01) //set when reported actuator position (over CAN) has changed or set by serial command "SC1" or CAN message timeout period expiring (TIM1 ISR)
+			  {
+					if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
 					{
-						if ((ActuatorPositionState & 0x08) == 0)
+
+						if ((ActuatorPositionState & 0x02) == 0) //Test for actuator's 0x254 message received
 						{
-							//CAN position signal has not been received
-							//sprintf(tmpstr, "\e[6;12H\e[1;36;40mNO CAN POSITION SIGNAL\e[0m"); //set cyan text + reset attributes
-							sprintf(tmpstr, "\e[6;12H\e[7;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
-							strcpy(tempstring, tmpstr);
-							ActuatorPositionState = ActuatorPositionState | 0x08; //set message flash state
+							if ((ActuatorPositionState & 0x08) == 0) //test message flash state
+							{
+								//CAN position signal has not been received
+								//sprintf(tmpstr, "\e[6;12H\e[1;36;40mNO CAN POSITION SIGNAL\e[0m"); //set cyan text + reset attributes
+								sprintf(tmpstr, "\e[6;12H\e[7;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
+								strcpy(tempstring, tmpstr);
+								ActuatorPositionState = ActuatorPositionState | 0x08; //set message flash state flag
+							}
+							else
+							{
+								sprintf(tmpstr, "\e[6;12H\e[1;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
+								strcpy(tempstring, tmpstr);
+								ActuatorPositionState = ActuatorPositionState & 0xF7; //reset message flash state flag
+							}
 						}
 						else
 						{
-							sprintf(tmpstr, "\e[6;12H\e[1;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
+							sprintf(tmpstr, "\e[6;12H\e[1;36;40m\e[KActuator pos:%d\e[0m", ActuatorPosition); //set cyan text + reset attributes
 							strcpy(tempstring, tmpstr);
-							ActuatorPositionState = ActuatorPositionState & 0xF7; //reset flag
 						}
+						uint16_t stringlength = strlen(tempstring);
+						//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+						HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+						UartMsgSent = FLAG_SET;
+
+
+						ActuatorPositionState = ActuatorPositionState & 0xFE; //reset control bit
 					}
-					else
-					{
-						sprintf(tmpstr, "\e[6;12H\e[1;36;40m\e[KActuator pos:%d\e[0m", ActuatorPosition); //set cyan text + reset attributes
-						strcpy(tempstring, tmpstr);
-					}
-					uint16_t stringlength = strlen(tempstring);
-					//HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
-					HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
-					UartMsgSent = FLAG_SET;
 
-
-					ActuatorPositionState = ActuatorPositionState & 0xFE; //reset control bit
-				}
-
+			  }
 		  }
 	  }
 
@@ -2039,7 +2277,7 @@ int main(void)
 		  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
 		  {
 			  //clear message from display
-			  sprintf(tempstring, "\e[4;1H\e[KCAN error reported:0x%08X", CanErrorValue); //move cursor to 4th line, clear text,
+			  sprintf(tempstring, "\e[4;1H\e[KCAN error reported:0x%08lX", CanErrorValue); //move cursor to 4th line, clear text,
 			  uint16_t stringlength = strlen(tempstring);
 			  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
 			  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
@@ -2068,7 +2306,7 @@ int main(void)
 	  }
 
 
-	  if (ProcessRececivedCanData == FLAG_CLEAR) //don't grab more data until the previous data has been processed and displayed.
+	  if (ProcessReceivedCanData == FLAG_CLEAR) //don't grab more data until the previous data has been processed and displayed.
 	  {
 		  if (CanDataReceived == FLAG_SET) //test for CAN receive complete callback activity
 		  {
@@ -2080,14 +2318,14 @@ int main(void)
 				  CanData[i] = TempCanRxData[i];
 			  }
 
-			  ProcessRececivedCanData = FLAG_SET;
+			  ProcessReceivedCanData = FLAG_SET;
 			  CanDataReceived = FLAG_CLEAR;
 			  //output received CAN data
 		  }
 	  }
 
 
-	  if (ProcessRececivedCanData == FLAG_SET)
+	  if (ProcessReceivedCanData == FLAG_SET)
 	  {
 		  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
 		  {
@@ -2106,7 +2344,7 @@ int main(void)
 			  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
 			  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
 			  UartMsgSent = FLAG_SET;
-			  ProcessRececivedCanData = FLAG_CLEAR;
+			  ProcessReceivedCanData = FLAG_CLEAR;
 		  }
 
 
@@ -2316,9 +2554,10 @@ int main(void)
 			  uint8_t comp = 0;
 			  //char tmpstr[50] = "";
 			  recognisedstring = FLAG_CLEAR;
+			  prevcommandstringstate = FLAG_SET; //used to allow previous commad string acknowledgement to be cleared as soon as the next string is started
 
 
-			  if (commandlength == 1)
+			  if (commandlength == 1) //test for 1 character commands
 			  {
 				  comp = strcmp(RxString, "R");
 				  if (comp == 0)
@@ -2333,12 +2572,24 @@ int main(void)
 
 
 					  Resetcontrol = 1;
-					  FunctionDelay = 1000;
+					  FunctionDelay = 1000; //value decremented by TIM ISR before actual reset
 					  //HAL_NVIC_SystemReset();
 				  }
+
+				  comp = strcmp(RxString, "?");
+				  if (comp == 0)
+				  {
+					  //"?": Display serial commands
+					  screenblock = FLAG_SET; //prevent other main loop processed overwriting the screen
+					  ProcessIndex = 0x02; //Enable main loop process
+					  ProcessCount = 0;
+					  recognisedstring = FLAG_SET;
+
+				  }
+
 			  }
 
-			  if (commandlength == 2)
+			  if (commandlength == 2) //test for 2 character commands
 			  {
 
 				  comp = strcmp(RxString, "CH");
@@ -2612,7 +2863,7 @@ int main(void)
 				  comp = strncmp(RxString, "SC", 2);
 				  if (comp == 0)
 				  {
-					  if (RxString[2] = '1')
+					  if (RxString[2] == '1')
 					  {
 						  //"SC1": Enable dedicated shift demand sequencing
 
@@ -2623,9 +2874,9 @@ int main(void)
 						  strcat(tempstring, tmpstr);
 
 						  DedicatedShiftControl = DedicatedShiftControl | 0x80;
-						  ActuatorPositionState = 0x01; //initiate displaying of CANn actuator position
+						  ActuatorPositionState = 0x01; //initiate displaying of CAN actuator position
 
-						  ActuatorMsg2Timeoutcount = ActuatorMsg2TimeoutPeriod; //enable monitoring of actuator 2nd CAN message
+						  //ActuatorMsg2Timeoutcount = ActuatorMsg2TimeoutPeriod; //enable monitoring of actuator 2nd CAN message
 
 						  recognisedstring = FLAG_SET;
 					  }
@@ -2644,7 +2895,18 @@ int main(void)
 					  }
 				  }
 
+				  comp = strncmp(RxString, "SD?", 3);
+				  if (comp == 0)
+				  {
+					  //serial command "SD?"
+					  //split into a main loop process
 
+					  screenblock = FLAG_SET; //prevent other main loop processed overwriting the screen
+					  ProcessIndex = 0x01; //Enable main loop process
+					  ProcessCount = 0;
+					  recognisedstring = FLAG_SET;
+
+				  }
 
 				  //comp = strcmp(RxString, "XF"); //"XFy" set X-modem received data format
 				  comp = strncmp(RxString, "XF", 2); //"XFy" set X-modem received data format
@@ -2693,9 +2955,6 @@ int main(void)
 			  if (commandlength == 4) //4 character command strings
 			  {
 
-
-
-
 				  comp = strncmp(RxString, "AM", 2); //"AM"
 				  if (comp == 0)
 				  {
@@ -2711,6 +2970,7 @@ int main(void)
 							  sprintf(tmpstr, "Enabled"); //move cursor to 3rd line, clear text,
 							  strcat(tempstring, tmpstr);
 							  ActuatorPositionState = ActuatorPositionState | 0x04;
+							  PositionSignalTimeoutCount = PositionSignalTimeoutPeriod; //reset timeout period, value decremented by TIM1 ISR
 							  recognisedstring = FLAG_SET;
 						  }
 						  else
@@ -2736,6 +2996,7 @@ int main(void)
 							  sprintf(tmpstr, "Enabled"); //move cursor to 3rd line, clear text,
 							  strcat(tempstring, tmpstr);
 							  ActuatorMsg2State = 0x20;
+							  ActuatorMsg2Timeoutcount = ActuatorMsg2TimeoutPeriod; //enable monitoring of actuator 2nd CAN message
 							  recognisedstring = FLAG_SET;
 						  }
 						  else
@@ -2904,10 +3165,37 @@ int main(void)
 					  strcat(tempstring, tmpstr);
 					  recognisedstring = FLAG_SET;
 
-					  ShiftDemandCount = 0;
-					  ShiftDemand = 0x80;
-					  ShiftDemand = ShiftDemand | 0x01;
-					  Multishift = 0x80;
+					  strcpy(tmpstr, "\e[4;1H");
+					  strcat(tempstring, tmpstr);
+
+					  if ((DedicatedShiftControl & 0x80) != 0) //see serial command "SCx"
+					  {
+						  if ((DedicatedShiftControl & 0x40) != 0) //see serial command "SCCx"
+						  {
+							  if ((ActuatorPositionState & 0x02) != 0) //see serial command "RPCx"
+							  {
+								  ShiftDemandCount = 0;
+								  ShiftDemand = 0x80;
+								  ShiftDemand = ShiftDemand | 0x01;
+								  Multishift = 0x80;
+							  }
+							  else
+							  {
+								  strcpy(tmpstr, "Error: CAN Feedback required!");
+								  strcat(tempstring, tmpstr);
+							  }
+						  }
+						  else
+						  {
+							  strcpy(tmpstr, "Error: CAN shift sequencing not enabled");
+							  strcat(tempstring, tmpstr);
+						  }
+					  }
+					  else
+					  {
+						  strcpy(tmpstr, "Shift Sequencing NOT enabled");
+						  strcat(tempstring, tmpstr);
+					  }
 				  }
 
 				  comp = strcmp(RxString, "MLDN");
@@ -2921,22 +3209,44 @@ int main(void)
 					  strcat(tempstring, tmpstr);
 					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 					  strcpy(tempstring, tmpstr);
-					  strcat(tempstring, "Multiple logic level down shifts");
+					  strcat(tempstring, "Multiple logic level down shifts:");
 
 					  sprintf(tmpstr, "\e[0m"); //reset all attributes
 					  strcat(tempstring, tmpstr);
 					  recognisedstring = FLAG_SET;
 
-					  if ((DedicatedShiftControl & 0x80) != 0)
+					  strcpy(tmpstr, "\e[4;1H");
+					  strcat(tempstring, tmpstr);
+
+					  if ((DedicatedShiftControl & 0x80) != 0) //see serial command "SCx"
 					  {
-						  ShiftDemandCount = 0;
-						  ShiftDemand = 0x10;
-						  ShiftDemand = ShiftDemand | 0x01;
-						  Multishift = 0x80;
+						  if ((DedicatedShiftControl & 0x40) != 0) //see serial command "SCCx"
+						  {
+							  if ((ActuatorPositionState & 0x02) != 0) //see serial command "RPCx"
+							  {
+								  strcpy(tmpstr, "Activated");
+								  strcat(tempstring, tmpstr);
+
+								  ShiftDemandCount = 0;
+								  ShiftDemand = 0x20;
+								  ShiftDemand = ShiftDemand | 0x01;
+								  Multishift = 0x80;
+							  }
+							  else
+							  {
+								  strcpy(tmpstr, "Error: CAN Feedback required!");
+								  strcat(tempstring, tmpstr);
+							  }
+						  }
+						  else
+						  {
+							  strcpy(tmpstr, "Error: CAN shift sequencing not enabled");
+							  strcat(tempstring, tmpstr);
+						  }
 					  }
 					  else
 					  {
-						  strcpy(tmpstr, " Unavailable!");
+						  strcpy(tmpstr, "Shift Sequencing NOT enabled");
 						  strcat(tempstring, tmpstr);
 					  }
 
@@ -2953,7 +3263,7 @@ int main(void)
 					  strcat(tempstring, tmpstr);
 					  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 					  strcpy(tempstring, tmpstr);
-					  strcat(tempstring, "Multiple logic level up shifts");
+					  strcat(tempstring, "Multiple logic level up shifts:");
 
 					  sprintf(tmpstr, "\e[0m"); //reset all attributes
 					  strcat(tempstring, tmpstr);
@@ -2962,8 +3272,11 @@ int main(void)
 
 					  if ((DedicatedShiftControl & 0x80) != 0)
 					  {
+						  strcpy(tmpstr, " Activated");
+						  strcat(tempstring, tmpstr);
+
 						  ShiftDemandCount = 0;
-						  ShiftDemand = 0x20;
+						  ShiftDemand = 0x10;
 						  ShiftDemand = ShiftDemand | 0x01;
 						  Multishift = 0x80;
 					  }
@@ -3047,7 +3360,29 @@ int main(void)
 						  //"SCC1"
 						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 						  strcpy(tempstring, tmpstr);
-						  strcat(tempstring, "Shift control sequencing CAN Enabled");
+						  strcat(tempstring, "Shift control CAN sequencing:");
+
+						  if ((DedicatedShiftControl & 0x20) != 0)
+						  {
+							  //CAN position feedback required
+							  if ((ActuatorPositionState & 0x02) != 0) //see serial command "RPCx"
+							  {
+								  //actuator CAN positon has been reported
+								  strcat(tempstring, "Enabled");
+								  DedicatedShiftControl = DedicatedShiftControl | 0x40; //Enable shift demand sequence CAN output
+							  }
+							  else
+							  {
+								  strcat(tempstring, "CAN position NOT fedback!");
+							  }
+
+						  }
+						  else
+						  {
+							  strcat(tempstring, "Enabled; CAN position not required");
+							  DedicatedShiftControl = DedicatedShiftControl | 0x40; //Enable shift demand sequence CAN output
+						  }
+
 						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
 						  strcat(tempstring, tmpstr);
 						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
@@ -3055,8 +3390,6 @@ int main(void)
 
 						  sprintf(tmpstr, "\e[0m"); //reset all attributes
 						  strcat(tempstring, tmpstr);
-
-						  DedicatedShiftControl = DedicatedShiftControl | 0x40; //Enable shift demand sequence CAN output
 
 						  recognisedstring = FLAG_SET;
 
@@ -3123,13 +3456,13 @@ int main(void)
 							  uint16_t MaxSequencerSteps = (uint16_t)(*byteptr) << 8 | (uint16_t)(*(byteptr+1));
 							  SetSequencerMaxSteps(MaxSequencerSteps);
 
-							  sprintf(tmpstr, "Max steps:5d", MaxSequencerSteps); //reset all attributes
+							  sprintf(tmpstr, "Max steps:%5d", MaxSequencerSteps); //reset all attributes
 							  strcat(tempstring, tmpstr);
 							  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
 							  strcat(tempstring, tmpstr);
 
 							  MaxSequencerCycles = (uint16_t)(*(byteptr + 6)) << 8 | (uint16_t)(*(byteptr+7));
-							  sprintf(tmpstr, "Max cycles:5d"); //reset all attributes
+							  sprintf(tmpstr, "Max cycles:%5d", MaxSequencerCycles); //reset all attributes
 							  strcat(tempstring, tmpstr);
 							  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
 							  strcat(tempstring, tmpstr);
@@ -3321,8 +3654,8 @@ int main(void)
 							UserVal = Bcd2Hex(UserVal & 0xFFFF);
 
 
-							sprintf(tmpstr, "%4d", UserVal);
-							strcpy(tempstring, tmpstr);
+							sprintf(tmpstr, "\e[4;1H\e[K%4ld msec", UserVal);
+							strcat(tempstring, tmpstr);
 							ShiftDemandPulseTime = UserVal;
 
 						}
@@ -3344,7 +3677,7 @@ int main(void)
 
 			  }
 
-			  if (commandlength == 7)
+			  if (commandlength == 7) //7 character command strings
 			  {
 				  comp = strncmp(RxString, "PP", 2); //PP
 				  if (comp == 0)
@@ -3368,7 +3701,7 @@ int main(void)
 							  //function = UserVal & 0xFF;
 							  //functionRun = 1; //allow test function to execute within main loop
 
-							  sprintf(tmpstr, "%4d", UserVal);
+							  sprintf(tmpstr, "\e[4;1H\e[K%4ld msec", UserVal);
 							  strcat(tempstring, tmpstr);
 							  PreloadPullActivationTime = UserVal;
 
@@ -3404,7 +3737,7 @@ int main(void)
 							  //function = UserVal & 0xFF;
 							  //functionRun = 1; //allow test function to execute within main loop
 
-							  sprintf(tmpstr, "%4d", UserVal);
+							  sprintf(tmpstr, "\e[4;1H\e[K%4ld msec", UserVal);
 							  strcat(tempstring, tmpstr);
 							  PreloadPullDemandPulseTime = UserVal;
 
@@ -3440,9 +3773,9 @@ int main(void)
 							  //function = UserVal & 0xFF;
 							  //functionRun = 1; //allow test function to execute within main loop
 
-							  sprintf(tmpstr, "%4d", UserVal);
+							  sprintf(tmpstr, "\e[4;1H\e[K%4ld msec", UserVal);
 							  strcat(tempstring, tmpstr);
-							  PreloadPullActivationTime = UserVal;
+							  PreloadPushActivationTime = UserVal;
 
 						  }
 						  else
@@ -3476,7 +3809,7 @@ int main(void)
 							  //function = UserVal & 0xFF;
 							  //functionRun = 1; //allow test function to execute within main loop
 
-							  sprintf(tmpstr, "%4d", UserVal);
+							  sprintf(tmpstr, "\e[4;1H\e[K%4ld msec", UserVal);
 							  strcat(tempstring, tmpstr);
 							  PreloadPushDemandPulseTime = UserVal;
 
@@ -3513,8 +3846,8 @@ int main(void)
 						  //function = UserVal & 0xFF;
 						  //functionRun = 1; //allow test function to execute within main loop
 
-						  sprintf(tmpstr, "0x%4d", UserVal);
-						  strcpy(tempstring, tmpstr);
+						  sprintf(tmpstr, "\e[4;1H\e[K0x%4ld msec", UserVal);
+						  strcat(tempstring, tmpstr);
 						  Shift2ShiftTime = UserVal;
 
 					  }
@@ -3531,7 +3864,7 @@ int main(void)
 			  }
 
 
-			  if (commandlength == 8)
+			  if (commandlength == 8) //8 character command strings
 			  {
 				  comp = strncmp(RxString, "I2CA", 4); //I2CAxxxx
 				  if (comp == 0)
@@ -3661,7 +3994,7 @@ int main(void)
 			  }
 
 
-			  if (commandlength == 10) //test for 10 char
+			  if (commandlength == 10) //10 character command strings
 			  {
 				  comp = strncmp(RxString, "I2CW", 4); //I2CWaaaadd
 				  if (comp == 0)
@@ -3712,6 +4045,27 @@ int main(void)
 				  }
 			  }
 
+			  if (commandlength > 3) // >3 character command strings
+			  {
+				  comp = strncmp(RxString, "ESC", 3); //ESC*
+				  if (comp == 0)
+				  {
+					  //get length of string
+					  uint16_t stringlength = commandlength - 3;
+					  char* charptr = NULL;
+					  charptr = tmpstr;
+					  for (uint8_t j=0; j<stringlength; j++)
+					  {
+						  *(charptr + j) = RxString[3+j]; //copy escape sequence characters
+					  }
+
+					  //problem here is that the escape sequence is going to get overwritten by the main loop display routines...
+
+					  recognisedstring = FLAG_SET;
+
+				  }
+			  }
+
 			  if (recognisedstring == FLAG_CLEAR)
 			  {
 				  sprintf(tmpstr, "\e[3;1H\e[K\e[1;37;41m"); //move cursor to 3rd line, clear text, white text on red background
@@ -3739,7 +4093,8 @@ int main(void)
 		  {
 			  //clear ECSAPE message from VT100 screen
 			  //char tmpstr[20] = "";
-			  sprintf(tmpstr, "\e[2;1H\e[K"); //move cursor to 2nd line, clear
+			  //printf(tmpstr, "\e[2;1H\e[K"); //move cursor to 2nd line, clear
+			  sprintf(tmpstr, "\e[2J\e[H"); //clear screen and home cursor
 			  strcpy(tempstring, tmpstr);
 
 			  uint16_t stringlength = strlen(tempstring);
@@ -3755,13 +4110,17 @@ int main(void)
 				  ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop code
 			  }
 
-			  if ((ActuatorMsg2State & 0x20) != 0)
+			  if ((ActuatorMsg2State & 0x20) != 0) //test flag set by serial command "AM21"
 			  {
 				  //prepare to update screen with actuator message 2 data
 				  ActuatorMsg2State = ActuatorMsg2State | 0x01;
 				  ActuatorMsg2State = ActuatorMsg2State | 0x02;
 				  ActuatorMsg2State = ActuatorMsg2State | 0x40; //flag to main loop to update display
+			  }
 
+			  if ((ActuatorPositionState & 0x04) != 0) //test flag set by serial cpommad "AM11"
+			  {
+				  ActuatorPositionState = ActuatorPositionState | 0x01; //force update of CAN position display
 			  }
 
 			  RxState = RxState & 0xEF; //clear flag
@@ -3938,13 +4297,21 @@ int main(void)
 					  __HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE); //re-enable receive interrupts
 
 					  strcpy(tempstring, "");
-					  if (recognisedstring == FLAG_CLEAR)
+//					  if (recognisedstring == FLAG_CLEAR)
+//					  {
+//						  //clear 'unrecognised string' message
+//						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+//						  strcat(tempstring, tmpstr);
+//						  recognisedstring = FLAG_SET; //set flag to prevent continuous clearing of screen line with each received new string character
+//					  }
+					  if (prevcommandstringstate == FLAG_SET) //flag is set as soon as a command string is processed
 					  {
-						  //clear 'unrecognised string' message
+						  prevcommandstringstate = FLAG_CLEAR;
 						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 						  strcat(tempstring, tmpstr);
-						  recognisedstring = FLAG_SET; //set flag to prevent continuous clearing of screen line with each received new string character
+
 					  }
+
 
 					  sprintf(tmpstr, "\e[1;1H\e[K\e[1;33;40m"); //set cursor to line 1, clear existing data, set yellow background
 					  strcat(tempstring, tmpstr);
@@ -4019,6 +4386,11 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
   }
+
+
+
+
+
   /* USER CODE END 3 */
 }
 
@@ -4540,7 +4912,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 
 
-		if (PositionSignalTimeoutCount != 0)
+		if (PositionSignalTimeoutCount != 0) //this value is reset by reception of actuator 0x254 CAN message and serial command "AM11"
 		{
 			PositionSignalTimeoutCount--;
 			if (PositionSignalTimeoutCount == 0)
@@ -4601,7 +4973,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				if (InitiateShiftDemand == 1)
 				{
 					ShiftDemandPulseCount = ShiftDemandPulseTime;
-					PreloadPullActivationCount = PreloadPullActivationTime;
+					PreloadPullActivationCount = PreloadPullActivationTime + 1; //add offset to ensure each sequence step is executed
 
 					if (Multishift != 0) //see serial commands "MLUP","MLDN"
 					{
@@ -4702,21 +5074,24 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				{
 					ShiftDemand = ShiftDemand & 0xF0;
 					ShiftDemand = ShiftDemand | 0x03; //advance state count
-					PreloadPullDemandCount = PreloadPullDemandPulseTime;
+					PreloadPullDemandCount = PreloadPullDemandPulseTime + 1; //ensure non zero value to ensure each sequence step is executed
 				}
 			}
 
 			if (PreloadPullDemandCount != 0)
 			{
-				//activate preload 'pull' signal
-				HAL_GPIO_WritePin(GPIOD, HSD_3_Pin, GPIO_PIN_SET);
+				if (PreloadPullDemandPulseTime != 0) //prevent output glitches is time is set to zero
+				{
+					//activate preload 'pull' signal
+					HAL_GPIO_WritePin(GPIOD, HSD_3_Pin, GPIO_PIN_SET); //activate preload 'pull' signal
+				}
 				PreloadPullDemandCount--;
 
 				if (PreloadPullDemandCount == 0)
 				{
 					ShiftDemand = ShiftDemand & 0xF0;
 					ShiftDemand = ShiftDemand | 0x04; //advance state count
-					PreloadPushActivationCount = PreloadPushActivationTime;
+					PreloadPushActivationCount = PreloadPushActivationTime + 1;
 				}
 			}
 			else
@@ -4732,74 +5107,23 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				{
 					ShiftDemand = ShiftDemand & 0xF0;
 					ShiftDemand = ShiftDemand | 0x05; //advance state count
-					PreloadPushDemandCount = PreloadPushDemandPulseTime;
+					PreloadPushDemandCount = PreloadPushDemandPulseTime + 1;
 				}
 			}
 
 			if (PreloadPushDemandCount != 0)
 			{
 				//activate preload 'push' signal
-				HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_SET);
+				if (PreloadPushDemandPulseTime != 0)
+				{
+					HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_SET); //activate preload push signal
+				}
 				PreloadPushDemandCount--;
 				if (PreloadPushDemandCount == 0)
 				{
 					ShiftDemand = ShiftDemand & 0xF0;
 					ShiftDemand = ShiftDemand | 0x06; //advance state count
 
-
-//					//shift demand completed
-//					if (Multishift != 0)
-//					{
-//						ShiftDemand = ShiftDemand & 0xF0; //clear progress counter bits
-//
-//						if ((ActuatorPositionState & 0x02) != 0)
-//						{
-////							//test for repeated up-shifts
-////							if ((ShiftDemand & 0xA0) != 0)
-////							{
-////								if (ActuatorPosition < PositionMaxLimit)
-////								{
-////									ShiftDemand = ShiftDemand | 0x06; //advance state count
-////								}
-////								else
-////								{
-////									Multishift = 0; //disable multiple shifting
-////								}
-////							}
-////							//test for repeated down-shifts
-////							if ((ShiftDemand & 0x50) != 0)
-////							{
-////								if (ActuatorPosition > PositionMinLimit)
-////								{
-////									ShiftDemand = ShiftDemand | 0x06; //advance state count
-////								}
-////								else
-////								{
-////									Multishift = 0; //disable multiple shifting
-////								}
-////							}
-//						}
-//						else
-//						{
-//							if (ShiftDemandCount < 9)
-//							{
-//								ShiftDemand = ShiftDemand | 0x06; //advance state count
-//								ShiftDemandCount++;
-//							}
-//							else
-//							{
-//								Multishift = 0; //disable multiple shifting
-//							}
-//						}
-//
-//					}
-//					else
-//					{
-//						ShiftDemand = ShiftDemand & 0xF0;
-//
-//						Shiftdemandfeedback = Shiftdemandfeedback & 0xF0; //error 0
-//						Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
-//					}
 				}
 			}
 			else
@@ -4816,7 +5140,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 						if ((ActuatorPositionState & 0x02) == 0)
 						{
-							if (ShiftDemandCount < 9)
+							if (ShiftDemandCount < 8)
 							{
 								//ShiftDemand = ShiftDemand | 0x07; //advance state count
 								ShiftDemandCount++;
@@ -4840,7 +5164,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 			}
 
-			if (Multishift != 0)
+			if (Multishift != 0) //see serial commands "MLUP", "MLDN"
 			{
 				if (Shift2ShiftCount != 0)
 				{
@@ -5014,18 +5338,19 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 
 				if ((ActuatorPositionState & 0x02) == 0)
 				{
-					ActuatorPositionState = ActuatorPositionState | 0x02; //record that an actuator message has been received
-					ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop to update displayed position
+					ActuatorPositionState = ActuatorPositionState | 0x02; 	//record that an actuator message has been received, this will be cleared if timeout period expires
+					ActuatorPositionState = ActuatorPositionState | 0x01; 	//flag to main loop to update displayed position
 
-					ActuatorPositionState = ActuatorPositionState & 0xF7; //reset flash state flag
+					ActuatorPositionState = ActuatorPositionState & 0xF7; 	//reset flash state flag
 					ActuatorMsg1FlashCount = 0;								//prevent message flashing
 				}
-				PositionSignalTimeoutCount = PositionSignalTimeoutPeriod; //reset timeout period, value decremented by TIM1 ISR
+
+				PositionSignalTimeoutCount = PositionSignalTimeoutPeriod; 	//reset timeout period, value decremented by TIM1 ISR
 				if (ActuatorPosition != PrevActuatorPosition)
 				{
 					PrevActuatorPosition = ActuatorPosition;
 
-					ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop to update displayed position
+					ActuatorPositionState = ActuatorPositionState | 0x01; 	//flag to main loop to update displayed position
 				}
 			}
 
@@ -5044,7 +5369,6 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 					ActuatorMsg2State = ActuatorMsg2State & 0xEF;	//reset flash state flag
 					ActuatorMsg2FlashCount = 0;						//prevent message flashing
 				}
-
 
 				ActuatorMsg2Timeoutcount = ActuatorMsg2TimeoutPeriod; //reset message timeout period, value decremented by TIM 1 ISR
 				if (ActuatorMotorTemp != PrevActuatorMotorTemp)
@@ -5226,6 +5550,10 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 		UartMsgSent = FLAG_CLEAR; // indicate to main loop that new data can be sent
 	}
 }
+
+
+
+
 
 /* USER CODE END 4 */
 
