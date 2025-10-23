@@ -53,7 +53,7 @@
 #define CRCHAR 13	//Carriage return character
 
 #define PROJECTSTRING "Sequencer MkII V0.0.1"
-#define DATESTRING "22OCT2025"
+#define DATESTRING "23OCT2025"
 
 
 
@@ -280,7 +280,7 @@ void tempfunction(void)
 void MainLoopProcess02(void)
 {
 	//Created 22OCT2025
-	//Last edited 22OCT2025
+	//Last edited 23OCT2025
 	//Function used by mainloop to output serial commands
 	//See serial command "?"
 	if (ProcessIndex == 0x02)
@@ -296,43 +296,43 @@ void MainLoopProcess02(void)
 					  strcpy(tmpstr, "Serial commands");
 					  strcat(tempstring, tmpstr);
 
-					  strcat(tempstring, "\e[2:1H"); //move cursor to 1st line, clear text,
+					  strcat(tempstring, "\e[3:1H"); //move cursor to 1st line, clear text,
 					  strcat(tempstring, "\tSCx: Sequenced Shift demand control");
-					  strcat(tempstring, "\e[3:1H"); //move cursor to 2nd line, clear text,
+					  strcat(tempstring, "\e[4:1H"); //move cursor to 2nd line, clear text,
 					  strcat(tempstring, "\tSCCx: Sequenced CAN Shift demand control");
 					  break;
 
 				case(1):
-					  strcpy(tempstring, "\e[4:1H"); //move cursor to 3th line, clear text,
+					  strcpy(tempstring, "\e[5:1H"); //move cursor to 3th line, clear text,
 					  strcat(tempstring, "\tSDxxxx: Shift demand pulse width");
-					  strcat(tempstring, "\e[5:1H"); //move cursor to 4th line, clear text,
+					  strcat(tempstring, "\e[6:1H"); //move cursor to 4th line, clear text,
 					  strcat(tempstring, "\tPPAxxxx: Preload Pull activation delay (msec)");
 					  break;
 
 				case(2):
-					  strcpy(tempstring, "\e[6:1H"); //move cursor to 5th line, clear text,
+					  strcpy(tempstring, "\e[7:1H"); //move cursor to 5th line, clear text,
 					  strcat(tempstring, "\tPPBxxxx: Preload Pull demand pulse width");
-					  strcat(tempstring, "\e[7:1H"); //move cursor to 6th line, clear text,
+					  strcat(tempstring, "\e[8:1H"); //move cursor to 6th line, clear text,
 					  strcat(tempstring, "\tPPCxxxx: Preload Push activation delay (msec)");
 					  break;
 
 				case(3):
-					  strcpy(tempstring, "\e[8:1H"); //move cursor to 7th line, clear text,
-					  strcat(tempstring, "\tPPDxxxx: Preload Push demand pulse wisth (msec)");
-					  strcpy(tempstring, "\e9:1H"); //move cursor to 8th line, clear text,
+					  strcpy(tempstring, "\e[9:1H"); //move cursor to 7th line, clear text,
+					  strcat(tempstring, "\tPPDxxxx: Preload Push demand pulse width (msec)");
+					  strcat(tempstring, "\e[10:1H"); //move cursor to 8th line, clear text,
 					  strcat(tempstring, "\tRPCx: Utilise reported CAN position signal");
 					  break;
 
 				case(4):
-					  strcpy(tempstring, "\e[10:1H"); //move cursor to 9th line, clear text,
+					  strcpy(tempstring, "\e[11:1H"); //move cursor to 9th line, clear text,
 					  strcat(tempstring, "\tAM1x: Actuator CAN message 1 processing");
-					  strcat(tempstring, "\e[11:1H"); //move cursor to 10th line, clear text,
+					  strcat(tempstring, "\e[12:1H"); //move cursor to 10th line, clear text,
 					  strcat(tempstring, "\tAM2x: Actuator CAN message 2 processing");
 					  break;
 
 
 				case(5):
-					  strcpy(tempstring, "\e[12:1H"); //move cursor to 11th line, clear text,
+					  strcpy(tempstring, "\e[13:1H"); //move cursor to 11th line, clear text,
 					  strcat(tempstring, "\tRSDxxxx: set multiple shift-shift delay time (msec)");
 					  break;
 
@@ -360,7 +360,7 @@ void MainLoopProcess02(void)
 void MainLoopProcess01(void)
 {
 	//Created 22OCT2025
-	//Last edited 22OCT2025
+	//Last edited 23OCT2025
 	//Main loop process 01. This function is called by the main loop but triggered by serial command "SD?"
 	//Designed to display actuator shift demand configuration info on the display
 	//Makes use of global variables!!!
@@ -377,13 +377,13 @@ void MainLoopProcess01(void)
 			{
 			case(0):
 				  //sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
-				  sprintf(tmpstr, "\e[2j;\e[H"); //clear screen and home cursor
+				  sprintf(tmpstr, "\e[2J\e[H"); //clear screen and home cursor
 				  strcpy(tempstring, tmpstr);
 				  strcpy(tmpstr, "Shift demand sequencing configuration");
 				  strcat(tempstring, tmpstr);
 
 				  strcat(tempstring, "\e[4:1H\e[K"); //move cursor to 4th line, clear text,
-				  strcat(tempstring, "\tShift Sequencing: ");
+				  strcat(tempstring, "\tShift Sequencing:\t\t");
 				  if ((DedicatedShiftControl & 0x80) != 0) //see serial command "SCx"
 				  {
 					  strcat(tempstring, "Enabled");
@@ -396,7 +396,7 @@ void MainLoopProcess01(void)
 
 			case(1):
 				  strcpy(tempstring, "\e[5:1H\e[K"); //move cursor to 5th line, clear text,
-				  strcat(tempstring, "\tCAN Shift Sequencing: ");
+				  strcat(tempstring, "\tCAN Shift Sequencing:\t\t");
 				  if ((DedicatedShiftControl & 0x40) != 0) //see serial command "SCCx"
 				  {
 					  strcat(tempstring, "Enabled");
@@ -409,33 +409,33 @@ void MainLoopProcess01(void)
 
 			case(2):
 				  strcpy(tempstring, "\e[6:1H"); //move cursor to 6th line, clear text,
-				  sprintf(tmpstr, "\tShift demand pulse width: %4dmsec", ShiftDemandPulseTime);
+				  sprintf(tmpstr, "\tShift demand pulse width:\t%4dmsec", ShiftDemandPulseTime);
 				  strcat(tempstring,tmpstr);
 
 				  strcat(tempstring, "\e[7:1H"); //move cursor to 7th line, clear text,
-				  sprintf(tmpstr, "\tPreload pull activation delay: %4dmsec", PreloadPullActivationTime); //PPAxxxx
+				  sprintf(tmpstr, "\tPreload pull activation delay:\t%4dmsec", PreloadPullActivationTime); //PPAxxxx
 				  strcat(tempstring,tmpstr);
 				  break;
 
 			case(3):
 				  strcat(tempstring, "\e[8:1H"); //move cursor to 8th line, clear text,
-				  sprintf(tmpstr, "\tPreload pull demand pulse: %4dmsec", PreloadPullDemandPulseTime); //PPBxxxx
+				  sprintf(tmpstr, "\tPreload pull demand pulse:\t%4dmsec", PreloadPullDemandPulseTime); //PPBxxxx
 				  strcat(tempstring,tmpstr);
 
 				  strcat(tempstring, "\e[9:1H"); //move cursor to 9th line, clear text,
-				  sprintf(tmpstr, "\tPreload push activation delay: %4dmsec", PreloadPushActivationTime); //PPCxxxx
+				  sprintf(tmpstr, "\tPreload push activation delay:\t%4dmsec", PreloadPushActivationTime); //PPCxxxx
 				  strcat(tempstring,tmpstr);
 				  break;
 
 			case(4):
 				  strcat(tempstring, "\e[10:1H"); //move cursor to 10th line, clear text,
-				  sprintf(tmpstr, "\tPreload push demand pulse: %4dmsec", PreloadPushDemandPulseTime); //PPDxxxx
+				  sprintf(tmpstr, "\tPreload push demand pulse:\t%4dmsec", PreloadPushDemandPulseTime); //PPDxxxx
 				  strcat(tempstring,tmpstr);
 				  break;
 
 			case(5):
 				  strcpy(tempstring, "\e[11:1H"); //move cursor to 11th line, clear text,
-				  strcat(tempstring, "\tUse CAN position: ");
+				  strcat(tempstring, "\tUse CAN position:\t\t");
 				  if ((DedicatedShiftControl & 0x20) != 0) //see serial command "RPCx"
 				  {
 					  strcat(tempstring, "Enabled");
@@ -448,7 +448,7 @@ void MainLoopProcess01(void)
 
 			case(6):
 				  strcat(tempstring, "\e[12:1H"); //move cursor to 10th line, clear text,
-				  sprintf(tmpstr, "\tMultiple shift-shift delay: %4dmsec", Shift2ShiftTime); //RSDxxxx
+				  sprintf(tmpstr, "\tMultiple shift-shift delay:\t%4dmsec", Shift2ShiftTime); //RSDxxxx
 				  strcat(tempstring,tmpstr);
 				  break;
 
@@ -826,14 +826,15 @@ int main(void)
   {
   }
 
-  strcpy(tempstring, DATESTRING);
+  strcpy(tempstring, "Last edited: ");
+  strcat(tempstring, DATESTRING);
   strcat(tempstring, "\r\n");
   stringlength = strlen(tempstring);
   //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
   HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
   UartMsgSent = FLAG_SET;
 
-  while (UartMsgSent == FLAG_SET)
+  while (UartMsgSent == FLAG_SET) //flag cleared by UART Tx ISR
   {
   }
 
@@ -1104,9 +1105,7 @@ int main(void)
 			  //Load sequencer buffer
 			  //Sequencer process won't run until the buffer contains data
 			  SeqBufferLoadEntry();
-
 		  }
-
 
 
 		  if (GetSeqBufferFillLevel() != 0)
@@ -2330,7 +2329,7 @@ int main(void)
 		  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
 		  {
 			  char tempstring2[40] = "";
-			  sprintf(tempstring, "\e[21;1HCAN Id:0x%3X, DLC:%d, data:", CanIdentifier, CanDlc);
+			  sprintf(tempstring, "\e[21;1H\e[KCAN Id:0x%3X, DLC:%d, data:", CanIdentifier, CanDlc);
 			  for (uint8_t i=0; i<CanDlc; i++)
 			  {
 				  sprintf(tempstring2, "0x%02X,", CanData[i]);
@@ -3143,10 +3142,55 @@ int main(void)
 					  strcat(tempstring, tmpstr);
 					  recognisedstring = FLAG_SET;
 
-					  ShiftDemandCount = 0;
-					  ShiftDemand = 0x40;
-					  ShiftDemand = ShiftDemand | 0x01;
-					  Multishift = 0x80;
+					  strcpy(tmpstr, "\e[4;1H");
+					  strcat(tempstring, tmpstr);
+
+					  if ((DedicatedShiftControl & 0x80) != 0) //see serial command "SCx"
+					  {
+						  if ((DedicatedShiftControl & 0x40) != 0) //see serial command "SCCx"
+						  {
+							  if ((DedicatedShiftControl & 0x20) != 0) //see serial command "RPCx"
+							  {
+								  //CAN feedback specified
+								  if ((ActuatorPositionState & 0x02) == 0) //test for CAN position message reception
+								  {
+									  strcpy(tmpstr, "Activated (1)");
+									  strcat(tempstring, tmpstr);
+
+									  ShiftDemandCount = 0;
+									  ShiftDemand = 0x40;
+									  ShiftDemand = ShiftDemand | 0x01;
+									  Multishift = 0x80;
+								  }
+								  else
+								  {
+									  strcpy(tmpstr, "Error: CAN Feedback required!");
+									  strcat(tempstring, tmpstr);
+								  }
+							  }
+							  else
+							  {
+								  strcpy(tmpstr, "Activated (2)");
+								  strcat(tempstring, tmpstr);
+
+								  ShiftDemandCount = 0;
+								  ShiftDemand = 0x40;
+								  ShiftDemand = ShiftDemand | 0x01;
+								  Multishift = 0x80;
+							  }
+						  }
+						  else
+						  {
+							  strcpy(tmpstr, "Error: CAN shift sequencing not enabled");
+							  strcat(tempstring, tmpstr);
+						  }
+					  }
+					  else
+					  {
+						  strcpy(tmpstr, "Shift Sequencing NOT enabled");
+						  strcat(tempstring, tmpstr);
+					  }
+
 				  }
 
 				  comp = strcmp(RxString, "MCUP");
@@ -3172,17 +3216,34 @@ int main(void)
 					  {
 						  if ((DedicatedShiftControl & 0x40) != 0) //see serial command "SCCx"
 						  {
-							  if ((ActuatorPositionState & 0x02) != 0) //see serial command "RPCx"
+							  if ((DedicatedShiftControl & 0x20) != 0) //see serial command "RPCx"
 							  {
+								  //CAN feedback specified
+								  if ((ActuatorPositionState & 0x02) == 0) //test for CAN position message reception
+								  {
+									  strcpy(tmpstr, "Activated (1)");
+									  strcat(tempstring, tmpstr);
+
+									  ShiftDemandCount = 0;
+									  ShiftDemand = 0x80;
+									  ShiftDemand = ShiftDemand | 0x01;
+									  Multishift = 0x80;
+								  }
+								  else
+								  {
+									  strcpy(tmpstr, "Error: CAN Feedback required!");
+									  strcat(tempstring, tmpstr);
+								  }
+							  }
+							  else
+							  {
+								  strcpy(tmpstr, "Activated (2)");
+								  strcat(tempstring, tmpstr);
+
 								  ShiftDemandCount = 0;
 								  ShiftDemand = 0x80;
 								  ShiftDemand = ShiftDemand | 0x01;
 								  Multishift = 0x80;
-							  }
-							  else
-							  {
-								  strcpy(tmpstr, "Error: CAN Feedback required!");
-								  strcat(tempstring, tmpstr);
 							  }
 						  }
 						  else
@@ -3220,11 +3281,14 @@ int main(void)
 
 					  if ((DedicatedShiftControl & 0x80) != 0) //see serial command "SCx"
 					  {
-						  if ((DedicatedShiftControl & 0x40) != 0) //see serial command "SCCx"
+
+						  if ((DedicatedShiftControl & 0x20) != 0) //see serial command "RPCx"
 						  {
-							  if ((ActuatorPositionState & 0x02) != 0) //see serial command "RPCx"
+							  //CAN feedback specified
+							  if ((ActuatorPositionState & 0x02) == 0) //test for CAN position message reception
 							  {
-								  strcpy(tmpstr, "Activated");
+								  //Actuator position CAN message present
+								  strcpy(tmpstr, "Activated (1)");
 								  strcat(tempstring, tmpstr);
 
 								  ShiftDemandCount = 0;
@@ -3234,15 +3298,21 @@ int main(void)
 							  }
 							  else
 							  {
-								  strcpy(tmpstr, "Error: CAN Feedback required!");
+								  strcpy(tmpstr, "Error: CAN Feedback signal required!");
 								  strcat(tempstring, tmpstr);
 							  }
 						  }
 						  else
 						  {
-							  strcpy(tmpstr, "Error: CAN shift sequencing not enabled");
+							  strcpy(tmpstr, "Activated (2)");
 							  strcat(tempstring, tmpstr);
+
+							  ShiftDemandCount = 0;
+							  ShiftDemand = 0x20;
+							  ShiftDemand = ShiftDemand | 0x01;
+							  Multishift = 0x80;
 						  }
+
 					  }
 					  else
 					  {
@@ -3269,24 +3339,48 @@ int main(void)
 					  strcat(tempstring, tmpstr);
 					  recognisedstring = FLAG_SET;
 
+					  strcpy(tmpstr, "\e[4;1H");
+					  strcat(tempstring, tmpstr);
 
-					  if ((DedicatedShiftControl & 0x80) != 0)
+					  if ((DedicatedShiftControl & 0x80) != 0) //see serial command "SCx"
 					  {
-						  strcpy(tmpstr, " Activated");
-						  strcat(tempstring, tmpstr);
+						  if ((DedicatedShiftControl & 0x20) != 0) //see serial command "RPCx"
+						  {
+							  //CAN feedback specified
+							  if ((ActuatorPositionState & 0x02) == 0) //test for CAN position message reception
+							  {
+								  //Actuator position CAN message present
+								  strcpy(tmpstr, "Activated (1)");
+								  strcat(tempstring, tmpstr);
 
-						  ShiftDemandCount = 0;
-						  ShiftDemand = 0x10;
-						  ShiftDemand = ShiftDemand | 0x01;
-						  Multishift = 0x80;
+								  ShiftDemandCount = 0;
+								  ShiftDemand = 0x10;
+								  ShiftDemand = ShiftDemand | 0x01;
+								  Multishift = 0x80;
+							  }
+							  else
+							  {
+								  strcpy(tmpstr, "Error: CAN Feedback signal required!");
+								  strcat(tempstring, tmpstr);
+							  }
+						  }
+						  else
+						  {
+							  strcpy(tmpstr, "Activated (2)");
+							  strcat(tempstring, tmpstr);
+
+							  ShiftDemandCount = 0;
+							  ShiftDemand = 0x10;
+							  ShiftDemand = ShiftDemand | 0x01;
+							  Multishift = 0x80;
+						  }
+
 					  }
 					  else
 					  {
-						  strcpy(tmpstr, " Unavailable!");
+						  strcpy(tmpstr, "Shift Sequencing NOT enabled");
 						  strcat(tempstring, tmpstr);
 					  }
-
-
 
 				  }
 
@@ -3361,7 +3455,8 @@ int main(void)
 						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 						  strcpy(tempstring, tmpstr);
 						  strcat(tempstring, "Shift control CAN sequencing:");
-
+						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
 						  if ((DedicatedShiftControl & 0x20) != 0)
 						  {
 							  //CAN position feedback required
@@ -3373,7 +3468,7 @@ int main(void)
 							  }
 							  else
 							  {
-								  strcat(tempstring, "CAN position NOT fedback!");
+								  strcat(tempstring, "Error: CAN position NOT fedback!");
 							  }
 
 						  }
@@ -3383,17 +3478,15 @@ int main(void)
 							  DedicatedShiftControl = DedicatedShiftControl | 0x40; //Enable shift demand sequence CAN output
 						  }
 
-						  sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
-						  strcat(tempstring, tmpstr);
-						  sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
-						  strcat(tempstring, tmpstr);
+						  //sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+						  //strcat(tempstring, tmpstr);
+						  //sprintf(tmpstr, "\e[5;1H\e[K"); //move cursor to 4th line, clear text,
+						  //strcat(tempstring, tmpstr);
 
 						  sprintf(tmpstr, "\e[0m"); //reset all attributes
 						  strcat(tempstring, tmpstr);
 
 						  recognisedstring = FLAG_SET;
-
-
 					  }
 				  }
 
