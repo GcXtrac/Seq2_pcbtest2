@@ -53,10 +53,16 @@
 #define CRCHAR 13	//Carriage return character
 
 #define PROJECTSTRING "Sequencer MkII V0.0.1"
-#define DATESTRING "23OCT2025"
+#define DATESTRING "29OCT2025"
 
 
-
+//enum OpDriveConfig{Disabled, Highside, Lowside, HiAndLoside};
+//typedef enum{Disabled, Highside, Lowside, HiAndLoside}OpDriveConfig;
+typedef enum
+{
+	Disabled = 0,
+	Enabled = 1
+} OpDriveConfig;
 
 /* USER CODE END PD */
 
@@ -237,6 +243,12 @@ uint8_t PrevActuatorPcbTemp = 0;
 uint32_t ActuatorMsg1FlashCount = 0; //if value is set to non-zero then value will be decremented by TIM1 ISR
 uint32_t ActuatorMsg1FlashTime = 300;
 
+//uint8_t OpDriveState = 0x01; //Enable high side drive outputs by default
+
+
+//enum OpDriveConfig OpDriveSetting =
+
+
 static uint8_t ProcessIndex = 0; 	//main loop process pointer
 									//1: Shift demand configuration help function
 
@@ -244,6 +256,9 @@ static uint8_t ProcessCount = 0;	//counter used to determine position within a m
 
 char tmpstr[200] = "";
 char tempstring[200] = "";
+
+OpDriveConfig HsOpDriveConfig = Enabled;
+OpDriveConfig LsOpDriveConfig = Disabled;
 
 
 /* USER CODE END PV */
@@ -630,6 +645,12 @@ int main(void)
 
 
 	 tempfunction();
+
+
+	 //uint8_t OpDriveSetting = 0;
+	 //enum OpDriveConfig OpDriveSetting =
+
+
 
   /* USER CODE END 1 */
 
@@ -2439,7 +2460,7 @@ int main(void)
 		  }
 
 
-		  if (IoTestStatus == 0x01)
+		  if (IoTestStatus == 0x01) //See serial command "IOTx"
 		  {
 			  if ((mainloopcount & 0x01) != 0)
 			  {
@@ -2650,6 +2671,79 @@ int main(void)
 
 			  if (commandlength == 3) //test for 3 character commands
 			  {
+
+				  comp = strncmp(RxString, "AH", 2);
+				  if (comp == 0)
+				  {
+					  if (RxString[2] == '0')
+					  {
+						  //command string "AH0": disable high side drive
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "High side drive disabled");
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+
+						  //OpDriveSetting = OpDriveSetting & 0xFE;
+						  HsOpDriveConfig = Disabled;
+
+						  recognisedstring = FLAG_SET;
+					  }
+
+					  if (RxString[2] == '1')
+					  {
+						  //command string "AH1": enable high side drive
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "High side drive Enabled");
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+
+						  //OpDriveSetting = OpDriveSetting | 0x01;
+						  HsOpDriveConfig = Enabled;
+
+						  recognisedstring = FLAG_SET;
+
+					  }
+
+				  }
+
+
+				  comp = strncmp(RxString, "AL", 2);
+				  if (comp == 0)
+				  {
+					  if (RxString[2] == '0')
+					  {
+						  //command string "AL0": disable low side drive
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Low side drive disabled");
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+
+						  //OpDriveSetting = OpDriveSetting & 0xFD;
+						  LsOpDriveConfig = Disabled;
+
+						  recognisedstring = FLAG_SET;
+					  }
+
+					  if (RxString[2] == '1')
+					  {
+						  //command string "AL1": enable low side drive
+						  sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						  strcpy(tempstring, tmpstr);
+						  strcat(tempstring, "Low side drive Enabled");
+						  sprintf(tmpstr, "\e[0m"); //reset all attributes
+						  strcat(tempstring, tmpstr);
+
+						  //OpDriveSetting = OpDriveSetting | 0x02;
+						  LsOpDriveConfig = Enabled;
+
+						  recognisedstring = FLAG_SET;
+
+					  }
+
+				  }
 
 				  comp = strcmp(RxString, "CDN");
 				  if (comp == 0)
@@ -3125,6 +3219,202 @@ int main(void)
 					  }
 				  }
 
+
+				  comp = strncmp(RxString, "HS", 2);
+				  if (comp == 0)
+				  {
+					  //Serial command "HSxy", x defines pin index, y defines state
+					  UserVal = ExtractValueFromString(RxString, 2, 2);
+					  if ((UserVal & 0x80000000) == 0)
+					  {
+						  sprintf(tmpstr, "High side drive pin: %d state %d\n", (uint8_t)(UserVal >> 4), (uint8_t)(UserVal & 0x0F));
+						  strcat(tempstring, tmpstr);
+						  uint8_t pinindex = (uint8_t)(UserVal >> 4);
+						  uint8_t pinstate = 0;
+						  uint8_t opstate = 0;
+						  if (pinindex > 0)
+						  {
+							  if (pinindex < 5)
+							  {
+								  pinstate = 1;
+								  opstate = (uint8_t)(UserVal & 0x0F);
+								  if (opstate < 2)
+								  {
+									  switch(opstate)
+									  {
+									  case(0):
+											switch(pinindex)
+											{
+											case(1):
+													HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_RESET);
+													break;
+
+											case(2):
+													HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_RESET);
+													break;
+
+											case(3):
+													HAL_GPIO_WritePin(GPIOD, HSD_3_Pin, GPIO_PIN_RESET);
+													break;
+
+											case(4):
+													HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_RESET);
+													break;
+											default:
+											}
+											break;
+
+									  case(1):
+											switch(pinindex)
+											{
+											case(1):
+													HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_SET);
+													break;
+
+											case(2):
+													HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_SET);
+													break;
+
+											case(3):
+													HAL_GPIO_WritePin(GPIOD, HSD_3_Pin, GPIO_PIN_SET);
+													break;
+
+											case(4):
+													HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_SET);
+													break;
+
+											default:
+											}
+									  	  	break;
+
+
+									default:
+
+									  }
+								  }
+								  else
+								  {
+									  sprintf(tmpstr, "Pin state not within specified range!");
+									  strcat(tempstring, tmpstr);
+
+								  }
+							  }
+						  }
+						  if (pinstate != 1)
+						  {
+							  sprintf(tmpstr, "Pin index not within specified range!");
+							  strcat(tempstring, tmpstr);
+						  }
+					  }
+					  else
+					  {
+						  sprintf(tmpstr, "High side drive parameter error!");
+						  strcat(tempstring, tmpstr);
+					  }
+
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  recognisedstring = FLAG_SET;
+
+				  }
+
+				  comp = strncmp(RxString, "LS", 2);
+				  if (comp == 0)
+				  {
+					  //Serial command "LSxy", x defines pin index, y defines state
+					  UserVal = ExtractValueFromString(RxString, 2, 2);
+					  if ((UserVal & 0x80000000) == 0)
+					  {
+						  sprintf(tmpstr, "Low side drive pin: %d state %d\n", (uint8_t)(UserVal >> 4), (uint8_t)(UserVal & 0x0F));
+						  strcat(tempstring, tmpstr);
+						  uint8_t pinindex = (uint8_t)(UserVal >> 4);
+						  uint8_t pinstate = 0;
+						  uint8_t opstate = 0;
+						  if (pinindex > 0)
+						  {
+							  if (pinindex < 5)
+							  {
+								  pinstate = 1;
+								  opstate = (uint8_t)(UserVal & 0x0F);
+								  if (opstate < 2)
+								  {
+									  switch(opstate)
+									  {
+									  case(0):
+											switch(pinindex)
+											{
+											case(1):
+													HAL_GPIO_WritePin(GPIOD, LSD_1_Pin, GPIO_PIN_RESET);
+													break;
+
+											case(2):
+													HAL_GPIO_WritePin(GPIOD, LSD_2_Pin, GPIO_PIN_RESET);
+													break;
+
+											case(3):
+													HAL_GPIO_WritePin(GPIOD, LSD_3_Pin, GPIO_PIN_RESET);
+													break;
+
+											case(4):
+													HAL_GPIO_WritePin(GPIOD, LSD_4_Pin, GPIO_PIN_RESET);
+													break;
+											default:
+											}
+											break;
+
+									  case(1):
+											switch(pinindex)
+											{
+											case(1):
+													HAL_GPIO_WritePin(GPIOD, LSD_1_Pin, GPIO_PIN_SET);
+													break;
+
+											case(2):
+													HAL_GPIO_WritePin(GPIOD, LSD_2_Pin, GPIO_PIN_SET);
+													break;
+
+											case(3):
+													HAL_GPIO_WritePin(GPIOD, LSD_3_Pin, GPIO_PIN_SET);
+													break;
+
+											case(4):
+													HAL_GPIO_WritePin(GPIOD, LSD_4_Pin, GPIO_PIN_SET);
+													break;
+
+											default:
+											}
+									  	  	break;
+
+
+									default:
+
+									  }
+								  }
+								  else
+								  {
+									  sprintf(tmpstr, "Pin state not within specified range!");
+									  strcat(tempstring, tmpstr);
+
+								  }
+							  }
+						  }
+						  if (pinstate != 1)
+						  {
+							  sprintf(tmpstr, "Pin index not within specified range!");
+							  strcat(tempstring, tmpstr);
+						  }
+					  }
+					  else
+					  {
+						  sprintf(tmpstr, "High side drive parameter error!");
+						  strcat(tempstring, tmpstr);
+					  }
+
+					  sprintf(tmpstr, "\e[0m"); //reset all attributes
+					  strcat(tempstring, tmpstr);
+					  recognisedstring = FLAG_SET;
+
+				  }
 
 				  comp = strcmp(RxString, "MCDN");
 				  if (comp == 0)
@@ -4136,6 +4426,64 @@ int main(void)
 						recognisedstring = FLAG_SET;
 
 				  }
+
+
+				  comp = strncmp(RxString, "POSMAX", 6); //POSMAXxxxx
+				  if (comp == 0)
+				  {
+						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						strcat(tempstring, "Position maximum:");
+						sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcat(tempstring, tmpstr);
+						//process address and data values
+						UserVal = ExtractValueFromString(RxString, 6, 4);
+						if ((UserVal & 0x80000000) == 0)
+						{
+							uint16_t position = UserVal & 0xFFFF;
+							PositionMaxLimit = position;
+
+							sprintf(tmpstr, "\tposition: 0x%04X", position);
+							strcat(tempstring,tmpstr);
+
+							strcat(tempstring,tmpstr);
+						}
+						else
+						{
+							sprintf(tmpstr, "Invalid position string!");
+							//SendSerial(msg);
+							strcat(tempstring,tmpstr);
+						}
+				  }
+
+				  comp = strncmp(RxString, "POSMIN", 6); //POSMINxxxx
+				  if (comp == 0)
+				  {
+						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						strcat(tempstring, "Position minimum:");
+						sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcat(tempstring, tmpstr);
+						//process address and data values
+						UserVal = ExtractValueFromString(RxString, 6, 4);
+						if ((UserVal & 0x80000000) == 0)
+						{
+							uint16_t position = UserVal & 0xFFFF;
+							PositionMinLimit = position;
+
+							sprintf(tmpstr, "\tposition: 0x%04X", position);
+							strcat(tempstring,tmpstr);
+
+							strcat(tempstring,tmpstr);
+						}
+						else
+						{
+							sprintf(tmpstr, "Invalid position string!");
+							//SendSerial(msg);
+							strcat(tempstring,tmpstr);
+						}
+				  }
+
 			  }
 
 			  if (commandlength > 3) // >3 character command strings
@@ -5088,7 +5436,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 						Shiftdemandfeedback = Shiftdemandfeedback | 0x03; 	//error 3
 
 					}
-					Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
+					Shiftdemandfeedback = Shiftdemandfeedback | 0x80; //indicate to main loop that feedback value has changed
 
 				}
 			}
@@ -5129,13 +5477,27 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 					if ((ShiftDemand & 0x20) != 0)
 					{
 						//apply logic level upshift signal state
-						HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_SET);
+						if (HsOpDriveConfig == Enabled) //see serial commad  "HSxy" (active by default)
+						{
+							HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_SET);
+						}
+						if (LsOpDriveConfig == Enabled)
+						{
+							HAL_GPIO_WritePin(GPIOD, LSD_1_Pin, GPIO_PIN_SET);
+						}
 
 					}
 					if ((ShiftDemand & 0x10) != 0)
 					{
 						//apply logic level downshift signal state
-						HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_SET);
+						if (HsOpDriveConfig == Enabled)
+						{
+							HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_SET);
+						}
+						if (LsOpDriveConfig == Enabled)
+						{
+							HAL_GPIO_WritePin(GPIOD, LSD_2_Pin, GPIO_PIN_SET);
+						}
 					}
 				}
 
@@ -5145,8 +5507,16 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			else
 			{
 				//apply CAN & logic level inactive shift demand signal states
-				HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_RESET);
-				HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_RESET);
+				if (HsOpDriveConfig == Enabled)
+				{
+					HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOD, HSD_2_Pin, GPIO_PIN_RESET);
+				}
+				if (LsOpDriveConfig == Enabled)
+				{
+					HAL_GPIO_WritePin(GPIOD, LSD_1_Pin, GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(GPIOD, LSD_2_Pin, GPIO_PIN_RESET);
+				}
 
 				if ((DedicatedShiftControl & 0x40) != 0) //see serial command "SCCx"
 				{
@@ -5241,6 +5611,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 							else
 							{
 								Multishift = 0; //disable multiple shifting
+
+								Shiftdemandfeedback = Shiftdemandfeedback & 0xF0; //error 0
+								Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
 							}
 						}
 

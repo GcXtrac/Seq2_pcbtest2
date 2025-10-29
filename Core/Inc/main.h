@@ -114,6 +114,12 @@ enum Sequencerstate
 	NEXTSTEPSETUP = 3,
 };
 
+//typedef enum
+//{
+//	Disabled = 0,
+//	Enabled = 1
+//} OpDriveConfig;
+
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
