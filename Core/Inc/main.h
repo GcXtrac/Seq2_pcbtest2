@@ -95,6 +95,9 @@ void Error_Handler(void);
 #define MODE2_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
+
+
+
 enum SeqDecode {
 				NONE = 0,
 				STEP = 1,

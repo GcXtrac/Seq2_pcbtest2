@@ -64,6 +64,14 @@ typedef enum
 	Enabled = 1
 } OpDriveConfig;
 
+
+enum ShiftDemandCycle
+{
+	ShiftDemandCycle_Disabled = 0,
+	ShiftDemandCycle_Enabled = 1
+};
+
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -155,8 +163,9 @@ uint8_t ShiftDemand = 0;	//bit 7:set for CAN upshift
 	 	 	 	 	 	 	//bit 6 set for CAN downshift
 	 	 	 	 	 	 	//bit 5: set for logic level upshift
 	 	 	 	 	 	 	//bit 4: set for logic level downshift
-							//bit 3~0: state count
+							/**/bit 3~0: state count**removed 3NOV2025
 
+uint8_t ShiftDemandState = 0; //state counter
 
 
 
@@ -214,6 +223,7 @@ uint32_t PositionSignalTimeoutCount = 0;
 uint32_t PositionSignalTimeoutPeriod = 50;
 
 uint32_t Shiftdemandfeedback = 0;	//bit7 using to indicate to main loop from TIM1 ISR
+									//bit4: current shift demand completed
 									//bit0~3 holds a error code
 									//	0: shift demand completed
 									//	1: CAN shift demand was blocked due to reported CAN position
@@ -259,6 +269,16 @@ char tempstring[200] = "";
 
 OpDriveConfig HsOpDriveConfig = Enabled;
 OpDriveConfig LsOpDriveConfig = Disabled;
+
+
+//ShiftDemandCycle ShiftdemandCycleState = 0;	//bit	7: Shift demand cycling enabled
+											//bit 0: direction: 0: upshift, 1: downshift
+
+enum ShiftDemandCycle ShiftDemandCycleState = ShiftDemandCycle_Disabled;
+
+uint32_t ShiftDemandCycleCount = 0;
+uint32_t ShiftDemandCycleCountMax = 0;
+
 
 
 /* USER CODE END PV */
@@ -2760,7 +2780,8 @@ int main(void)
 					  if ((DedicatedShiftControl & 0xC0) == 0xC0)
 					  {
 						  ShiftDemand = 0x40;
-						  ShiftDemand = ShiftDemand | 0x01;
+						  //ShiftDemand = ShiftDemand | 0x01;
+						  ShiftDemandState = 1
 						  //ShiftDemandPulse = 100; //set duration of shift demand pulse
 	//					  PreloadPullActivationtime = 50;
 	//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
@@ -2873,7 +2894,8 @@ int main(void)
 					  if ((DedicatedShiftControl & 0xC0) == 0xC0)
 					  {
 						  ShiftDemand = 0x80;
-						  ShiftDemand = ShiftDemand | 0x01;
+						  //ShiftDemand = ShiftDemand | 0x01;
+						  ShiftDemandState = 1;
 	//					  ShiftDemandPulse = 100; //set duration of shift demand pulse
 	//					  PreloadPullActivationtime = 50;
 	//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
@@ -2905,7 +2927,8 @@ int main(void)
 					  if ((DedicatedShiftControl & 0x80) != 0)
 					  {
 						  ShiftDemand = 0x20;
-						  ShiftDemand = ShiftDemand | 0x01;
+						  //ShiftDemand = ShiftDemand | 0x01;
+						  ShiftDemandState = 1;
 	//					  ShiftDemandPulse = 100; //set duration of shift demand pulse
 	//					  PreloadPullActivationtime = 50;
 	//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
@@ -2938,7 +2961,8 @@ int main(void)
 					  if ((DedicatedShiftControl & 0x80) != 0) //see serial command "SCx"
 					  {
 						  ShiftDemand = 0x10;
-						  ShiftDemand = ShiftDemand | 0x01;
+						  //ShiftDemand = ShiftDemand | 0x01;
+						  ShiftDemandState = 1;
 	//					  ShiftDemandPulse = 100; //set duration of shift demand pulse
 	//					  PreloadPullActivationtime = 50;
 	//					  PreloadPullDemandPulse = 100; //sets duration of preload pull demand pulse
@@ -3449,7 +3473,8 @@ int main(void)
 
 									  ShiftDemandCount = 0;
 									  ShiftDemand = 0x40;
-									  ShiftDemand = ShiftDemand | 0x01;
+									  //ShiftDemand = ShiftDemand | 0x01;
+									  ShiftDemandState = 1;
 									  Multishift = 0x80;
 								  }
 								  else
@@ -3465,7 +3490,8 @@ int main(void)
 
 								  ShiftDemandCount = 0;
 								  ShiftDemand = 0x40;
-								  ShiftDemand = ShiftDemand | 0x01;
+								  //ShiftDemand = ShiftDemand | 0x01;
+								  ShiftDemandState = 1;
 								  Multishift = 0x80;
 							  }
 						  }
@@ -3516,7 +3542,8 @@ int main(void)
 
 									  ShiftDemandCount = 0;
 									  ShiftDemand = 0x80;
-									  ShiftDemand = ShiftDemand | 0x01;
+									  //ShiftDemand = ShiftDemand | 0x01;
+									  ShiftDemandState = 1;
 									  Multishift = 0x80;
 								  }
 								  else
@@ -3532,7 +3559,8 @@ int main(void)
 
 								  ShiftDemandCount = 0;
 								  ShiftDemand = 0x80;
-								  ShiftDemand = ShiftDemand | 0x01;
+								  //ShiftDemand = ShiftDemand | 0x01;
+								  ShiftDemandState = 1;
 								  Multishift = 0x80;
 							  }
 						  }
@@ -3583,7 +3611,8 @@ int main(void)
 
 								  ShiftDemandCount = 0;
 								  ShiftDemand = 0x20;
-								  ShiftDemand = ShiftDemand | 0x01;
+								  //ShiftDemand = ShiftDemand | 0x01;
+								  ShiftDemandState = 1;
 								  Multishift = 0x80;
 							  }
 							  else
@@ -3599,7 +3628,8 @@ int main(void)
 
 							  ShiftDemandCount = 0;
 							  ShiftDemand = 0x20;
-							  ShiftDemand = ShiftDemand | 0x01;
+							  //ShiftDemand = ShiftDemand | 0x01;
+							  ShiftDemandState = 1;
 							  Multishift = 0x80;
 						  }
 
@@ -3645,7 +3675,8 @@ int main(void)
 
 								  ShiftDemandCount = 0;
 								  ShiftDemand = 0x10;
-								  ShiftDemand = ShiftDemand | 0x01;
+								  //ShiftDemand = ShiftDemand | 0x01;
+								  ShiftDemandState = 1;
 								  Multishift = 0x80;
 							  }
 							  else
@@ -3661,7 +3692,8 @@ int main(void)
 
 							  ShiftDemandCount = 0;
 							  ShiftDemand = 0x10;
-							  ShiftDemand = ShiftDemand | 0x01;
+							  //ShiftDemand = ShiftDemand | 0x01;
+							  ShiftDemandState = 1;
 							  Multishift = 0x80;
 						  }
 
@@ -3870,12 +3902,6 @@ int main(void)
 							  SetSequencerState(0);
 						  }
 
-
-
-
-
-
-
 					  }
 
 
@@ -3921,6 +3947,46 @@ int main(void)
 						SetInternalAddressWidth(width);
 						recognisedstring = FLAG_SET;
 					}
+
+					  comp = strncmp(RxString, "SCYC", 4); //"SCYCx"
+					  if (comp == 0)
+					  {
+						  //"SCYCx": Set shift demand cycling
+							sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+							strcpy(tempstring, tmpstr);
+							strcat(tempstring, "Shift demand cycling: ");
+
+
+							if (RxString[4] == '0')
+							{
+								//"SCYC0": Disable shuift demand cycling
+
+								strcpy(tmpstr, "\e[4;1H\e[KDisabled");
+								strcat(tempstring, tmpstr);
+
+								recognisedstring = FLAG_SET;
+								ShiftDemandCycleState = ShiftDemandCycle_Disabled;
+
+							}
+							if (RxString[4] == '1')
+														{
+								//"SCYC1": Enabled
+
+								strcpy(tmpstr, "\e[4;1H\e[KEnabled");
+								strcat(tempstring, tmpstr);
+
+								recognisedstring = FLAG_SET;
+								ShiftDemandCycleState = ShiftDemandCycle_Enabled;
+								ShiftDemandCycleCount = 0;
+							}
+
+
+							sprintf(tmpstr, "\e[0m"); //reset all attributes
+							strcat(tempstring, tmpstr);
+
+					  }
+
+
 			  }
 
 
@@ -4057,6 +4123,8 @@ int main(void)
 						recognisedstring = FLAG_SET;
 
 				  }
+
+
 
 			  }
 
@@ -4377,6 +4445,38 @@ int main(void)
 			  }
 
 
+			  if (commandlength == 10) //9 character command strings
+			  {
+				  comp = strncmp(RxString, "SCYCQ", 5); //SCYCQ
+				  if (comp == 0)
+				  {
+						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						strcat(tempstring, "Set shift demand cycle quantity:");
+						sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
+						strcat(tempstring, tmpstr);
+						//process address and data values
+						UserVal = ExtractValueFromString(RxString, 5, 4);
+						if ((UserVal & 0x80000000) == 0)
+						{
+							ShiftDemandCycleCountMax = UserVal & 0xFFFF;
+
+							sprintf(tmpstr, "\t: %d", ShiftDemandCycleCountMax);
+							strcat(tempstring,tmpstr);
+
+						}
+						else
+						{
+							sprintf(tmpstr, "Quantity invalid!\r\n");
+							//SendSerial(msg);
+							strcat(tempstring,tmpstr);
+						}
+						recognisedstring = FLAG_SET;
+
+				  }
+			  }
+
+
 			  if (commandlength == 10) //10 character command strings
 			  {
 				  comp = strncmp(RxString, "I2CW", 4); //I2CWaaaadd
@@ -4434,7 +4534,7 @@ int main(void)
 						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 						strcpy(tempstring, tmpstr);
 						strcat(tempstring, "Position maximum:");
-						sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
+						sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
 						strcat(tempstring, tmpstr);
 						//process address and data values
 						UserVal = ExtractValueFromString(RxString, 6, 4);
@@ -4446,7 +4546,6 @@ int main(void)
 							sprintf(tmpstr, "\tposition: 0x%04X", position);
 							strcat(tempstring,tmpstr);
 
-							strcat(tempstring,tmpstr);
 						}
 						else
 						{
@@ -4454,6 +4553,7 @@ int main(void)
 							//SendSerial(msg);
 							strcat(tempstring,tmpstr);
 						}
+						recognisedstring = FLAG_SET;
 				  }
 
 				  comp = strncmp(RxString, "POSMIN", 6); //POSMINxxxx
@@ -4462,7 +4562,7 @@ int main(void)
 						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
 						strcpy(tempstring, tmpstr);
 						strcat(tempstring, "Position minimum:");
-						sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 3rd line, clear text,
+						sprintf(tmpstr, "\e[4;1H\e[K"); //move cursor to 4th line, clear text,
 						strcat(tempstring, tmpstr);
 						//process address and data values
 						UserVal = ExtractValueFromString(RxString, 6, 4);
@@ -4474,7 +4574,6 @@ int main(void)
 							sprintf(tmpstr, "\tposition: 0x%04X", position);
 							strcat(tempstring,tmpstr);
 
-							strcat(tempstring,tmpstr);
 						}
 						else
 						{
@@ -4482,6 +4581,7 @@ int main(void)
 							//SendSerial(msg);
 							strcat(tempstring,tmpstr);
 						}
+						recognisedstring = FLAG_SET;
 				  }
 
 			  }
@@ -5368,7 +5468,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		if ((DedicatedShiftControl & 0x80) != 0)	//see serial command "SCx"
 		{
 			uint8_t Errval = 0;
-			if ((ShiftDemand & 0x0F) == 0x01) //see serial commands "LUP","LDN","CUP", "CDN", "MLUP", "MLDN"
+			if (ShiftDemandState == 0x01) //see serial commands "LUP","LDN","CUP", "CDN", "MLUP", "MLDN"
 			{
 
 				//test for repeated up-shifts
@@ -5383,9 +5483,23 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 						}
 						else
 						{
-							Shiftdemandfeedback = Shiftdemandfeedback & 0xF0;
-							Shiftdemandfeedback = Shiftdemandfeedback | 0x01; 	//error 1
-							//Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
+							if(ShiftDemandCycleState == ShiftDemandCycle_Enabled)
+							{
+								//position has reached maximum , prepare to run in oppsite direction
+								//determine type of shift demand
+								if (ShiftDemand == 0x10)
+								{
+									//logic level upshift
+									ShiftDemand = 0x20;
+									InitiateShiftDemand = 1;
+								}
+							}
+							else
+							{
+								Shiftdemandfeedback = Shiftdemandfeedback & 0xF0;
+								Shiftdemandfeedback = Shiftdemandfeedback | 0x01; 	//error 1
+								//Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
+							}
 						}
 
 					}
@@ -5398,9 +5512,35 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 						else
 						{
-							Shiftdemandfeedback = Shiftdemandfeedback & 0xF0;
-							Shiftdemandfeedback = Shiftdemandfeedback | 0x02; 	//error 2
-							//Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
+							if(ShiftDemandCycleState == ShiftDemandCycle_Enabled) //see serial command "SCYCx"
+							{
+								//position has reached maximum , prepare to run in oppsite direction
+								//determine type of shift demand
+								if (ShiftDemand == 0x20)
+								{
+									//logic level downshift
+									ShiftDemand = 0x10;
+									InitiateShiftDemand = 1;
+									ShiftDemandCycleCount++;
+									if (ShiftDemandCycleCountMax != 0)
+									{
+										if (ShiftDemandCycleCount > ShiftDemandCycleCountMax)
+										{
+											ShiftDemandCycleState = ShiftDemandCycle_Disabled;
+
+											//indicate to main loop that shift demand cycling has been completed
+											Shiftdemandfeedback = Shiftdemandfeedback & 0xF0; //error 0
+											Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
+										}
+									}
+								}
+							}
+							else
+							{
+								Shiftdemandfeedback = Shiftdemandfeedback & 0xF0;
+								Shiftdemandfeedback = Shiftdemandfeedback | 0x02; 	//error 2
+								//Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
+							}
 						}
 					}
 				}
@@ -5422,12 +5562,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 					}
 
 
-					ShiftDemand = ShiftDemand | 0x02; //advance state count
+					ShiftDemandState = 2; //advance state count
 				}
 
 				else
 				{
 					ShiftDemand = 0;
+					ShiftDemandState = 0;
 					Multishift  = 0;
 
 					if ((Shiftdemandfeedback & 0x0F) == 0)
@@ -5535,8 +5676,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				PreloadPullActivationCount--;
 				if (PreloadPullActivationCount == 0)
 				{
-					ShiftDemand = ShiftDemand & 0xF0;
-					ShiftDemand = ShiftDemand | 0x03; //advance state count
+					//ShiftDemand = ShiftDemand & 0xF0;
+					ShiftDemandState = 3; //advance state count
 					PreloadPullDemandCount = PreloadPullDemandPulseTime + 1; //ensure non zero value to ensure each sequence step is executed
 				}
 			}
@@ -5552,8 +5693,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 				if (PreloadPullDemandCount == 0)
 				{
-					ShiftDemand = ShiftDemand & 0xF0;
-					ShiftDemand = ShiftDemand | 0x04; //advance state count
+					//ShiftDemand = ShiftDemand & 0xF0;
+					ShiftDemandState = 4; //advance state count
 					PreloadPushActivationCount = PreloadPushActivationTime + 1;
 				}
 			}
@@ -5568,8 +5709,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				PreloadPushActivationCount--;
 				if (PreloadPushActivationCount == 0)
 				{
-					ShiftDemand = ShiftDemand & 0xF0;
-					ShiftDemand = ShiftDemand | 0x05; //advance state count
+					//ShiftDemand = ShiftDemand & 0xF0;
+					ShiftDemandState = 5; //advance state count
 					PreloadPushDemandCount = PreloadPushDemandPulseTime + 1;
 				}
 			}
@@ -5584,8 +5725,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				PreloadPushDemandCount--;
 				if (PreloadPushDemandCount == 0)
 				{
-					ShiftDemand = ShiftDemand & 0xF0;
-					ShiftDemand = ShiftDemand | 0x06; //advance state count
+					//ShiftDemand = ShiftDemand & 0xF0;
+					ShiftDemandState = 6; //advance state count
 
 				}
 			}
@@ -5594,14 +5735,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				//deactivate preload 'push' signal
 				HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_RESET);
 
-				if ((ShiftDemand & 0x0F) == 0x06)
+				if (ShiftDemandState == 0x06)
 				{
 					//shift demand completed
 					if (Multishift != 0)
 					{
-						ShiftDemand = ShiftDemand & 0xF0; //clear progress counter bits
+						ShiftDemandState = 0; //clear progress counter bits
 
-						if ((ActuatorPositionState & 0x02) == 0)
+						if ((ActuatorPositionState & 0x02) == 0)  //only enable shift demand if position feedback has been received
 						{
 							if (ShiftDemandCount < 8)
 							{
@@ -5620,7 +5761,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 					}
 					else
 					{
-						ShiftDemand = ShiftDemand & 0xF0;
+						//ShiftDemand = ShiftDemand & 0xF0;
+						ShiftDemandState = 0;
 
 						Shiftdemandfeedback = Shiftdemandfeedback & 0xF0; //error 0
 						Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
@@ -5637,7 +5779,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 					Shift2ShiftCount--;
 					if (Shift2ShiftCount == 0)
 					{
-						ShiftDemand = ShiftDemand | 0x01; //prepare to initiate a new shift demand
+						//ShiftDemand = ShiftDemand | 0x01; //prepare to initiate a new shift demand
+						ShiftDemandState = 1;
 					}
 				}
 			}
@@ -5802,7 +5945,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 				ActuatorPosition = (CanRxData[4] & 0x03) << 8;
 				ActuatorPosition = ActuatorPosition | CanRxData[3];
 
-				if ((ActuatorPositionState & 0x02) == 0)
+				if ((ActuatorPositionState & 0x02) == 0)  //only enable shift demand if position feedback has been received
 				{
 					ActuatorPositionState = ActuatorPositionState | 0x02; 	//record that an actuator message has been received, this will be cleared if timeout period expires
 					ActuatorPositionState = ActuatorPositionState | 0x01; 	//flag to main loop to update displayed position
