@@ -52,8 +52,8 @@
 #define ACKCHAR 6	//Acknowledge character value
 #define CRCHAR 13	//Carriage return character
 
-#define PROJECTSTRING "Sequencer MkII V0.0.1"
-#define DATESTRING "29OCT2025"
+#define PROJECTSTRING "Sequencer MkII V0.0.2"
+#define DATESTRING "3NOV2025"
 
 
 //enum OpDriveConfig{Disabled, Highside, Lowside, HiAndLoside};
