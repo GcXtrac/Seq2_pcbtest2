@@ -56,40 +56,6 @@
 #define DATESTRING "5NOV2025"
 
 
-//enum OpDriveConfig{Disabled, Highside, Lowside, HiAndLoside};
-//typedef enum{Disabled, Highside, Lowside, HiAndLoside}OpDriveConfig;
-typedef enum
-{
-	Disabled = 0,
-	Enabled = 1
-} OpDriveConfig;
-
-
-enum ShiftDemandCycle
-{
-	ShiftDemandCycle_Disabled = 0,
-	ShiftDemandCycle_Enabled = 1
-};
-
-enum ShiftDemandConfig
-{
-	LogicLevelUpShift = 0x80,
-	LogicLevelDownShift = 0x40,
-	CanUpShift = 0x20,
-	CanDownShift = 0x10,
-	CanShiftDemandsEnabled = 0x02, //see serial command "SCCx"
-	ShiftDemandActive = 0x01
-};
-
-enum ActuatorPositionConfig
-{
-	PositionMessageReceived = 0x01,
-	PositionUpdateFlag = 0x02,
-	CanPositionRequired = 0x04,
-	ProcessPositionMessage = 0x08,
-	MessageFlashState = 0x10
-
-};
 
 
 /* USER CODE END PD */
@@ -234,16 +200,20 @@ uint16_t PositionMaxLimit = 0x380; //limit used to prevent further upshifting
 uint16_t PositionMinLimit = 0x100; //limit used to prevent further downshifting
 uint16_t PrevActuatorPosition = 0;
 uint16_t ActuatorPosition = 0;
-uint8_t ActuatorPositionState = 0; 	//bit0: indicates value has been updated used as a flag between CAN received ISR and main loop
+//uint8_t ActuatorPositionState = 0; 	//bit0: indicates value has been updated used as a flag between CAN received ISR and main loop
 									//bit1: set if CAN position signal has been received, this value will be reset by TIM1 timepout period expiring.
 									//bit2: ** if actuator message 1 is to be processed (see serial command "AM1x" **
 									//bit3: actuator message flash state
 
-enum ActuatorPositionConfig ActuatorPositionState2 = (~PositionMessageReceived
-													| ~PositionUpdateFlag
-													| ~CanPositionRequired
-													| ~ProcessPositionMessage
-													| ~MessageFlashState );
+//enum ActuatorPositionConfig ActuatorPositionState2 = (~PositionMessageReceived
+//													| ~PositionUpdateFlag
+//													| ~CanPositionRequired
+//													| ~ProcessPositionMessage
+//													| ~MessageFlashState );
+
+enum ActuatorPositionConfig ActuatorPositionState2 = 0;
+
+
 
 uint32_t PositionSignalTimeoutCount = 0;
 uint32_t PositionSignalTimeoutPeriod = 50;
@@ -259,13 +229,17 @@ uint32_t Shiftdemandfeedback = 0;	//bit7 using to indicate to main loop from TIM
 
 uint8_t ActuatorMotorTemp = 0;
 uint8_t ActuatorPcbTemp = 0;
-uint8_t ActuatorMsg2State = 0; //bit flags:
+//uint8_t ActuatorMsg2State = 0; //bit flags:
 								//bit 7; indicate to main loop that the 2nd actuator message has been received, thius will be cleared if timeout period expires
 								//bit 6: actuator message 2 status has changed
 								//bit 5: set by command "AM2x"
 								//bit 4: set /cleared according to flash state
 								//bit 1: PCB temperature has changed
 								//bit 0: motor temperature has changed
+
+enum ActuatorCanMessage2Processing ActuatorMsg2State2 = 0;
+
+
 
 uint32_t ActuatorMsg2FlashCount = 0; //value is decremented by TIM1 ISR
 uint32_t ActuatorMsg2FlashTime = 350;
@@ -305,7 +279,10 @@ enum ShiftDemandCycle ShiftDemandCycleState = ShiftDemandCycle_Disabled;
 uint32_t ShiftDemandCycleCount = 0;
 uint32_t ShiftDemandCycleCountMax = 0;
 
-enum ShiftDemandConfig ShiftDemand2  = (~LogicLevelUpShift | ~LogicLevelDownShift | ~CanUpShift | ~CanDownShift | ~CanShiftDemandsEnabled | ~ShiftDemandActive);
+enum ShiftDemandConfig ShiftDemand2  = ~(LogicLevelUpShift | LogicLevelDownShift | CanUpShift | CanDownShift | CanShiftDemandsEnabled | ShiftDemandActive);
+
+//uint8_t IoTestStatus = 0x00;	//bit 0 controls main loop IO test function see serial command "IOTx"
+enum IoTestConfigFlags IoTestStatus = 0;
 
 /* USER CODE END PV */
 
@@ -691,7 +668,6 @@ int main(void)
 	 pTempCanTxHeader->ExtId = 0x00;
 	 pTempCanTxHeader->TransmitGlobalTime = 0;
 
-	 uint8_t IoTestStatus = 0x00;	//bit 0 controls main loop IO test function see serial command "IOTx"
 
 
 	 tempfunction();
@@ -919,6 +895,9 @@ int main(void)
 */
 
 
+  ActuatorPositionState2 = ActuatorPositionState2 | PositionMessageReceived; //set bit
+  ActuatorPositionState2 = ActuatorPositionState2 & ~PositionMessageReceived; // clear bit
+
 
   struct I2cConfig tempstruct; //create instance of structure defined in GcI2cV1.h
   //struct structI2cConfig tempstruct;
@@ -947,36 +926,51 @@ int main(void)
 	  if (screenblock == FLAG_CLEAR) //flag is cleared to prevent automatic/ period screen updates
 		  	  	  	  	  	  	  	  	//flag is cleared by 'escape' character
 	  {
-		  if ((ActuatorMsg2State & 0x20) != 0) //main control flag to enable processing of actuator msg 2 see serial command "AM2x"
+		  //if ((ActuatorMsg2State & 0x20) != 0) //main control flag to enable processing of actuator msg 2 see serial command "AM2x"
+		  //enum ActuatorCanMessage2Processing ActuatorMsg2State2 = 0;
+		  //enum ActuatorCanMessage2Processing
+		  //{
+		  //	CanMsg2ProcessingEnabled = 0x01,
+		  //	CanMsg2Update = 0x02,
+		  //	CanMsg2Received = 0x04
+		  //};
+		  if ((ActuatorMsg2State2 & CanMsg2ProcessingEnabled) == CanMsg2ProcessingEnabled) // see serial command "AM2x"
 		  {
-			  if ((ActuatorMsg2State & 0x40) != 0) //test for actuator 2nd message status change
+			  //if ((ActuatorMsg2State & 0x40) != 0) //test for actuator 2nd message status change
+			  if ((ActuatorMsg2State2 & CanMsg2Update) == CanMsg2Update)
 			  {
 				  if (UartMsgSent == FLAG_CLEAR) //flag cleared by UART TX complete ISR
 				  {
 					  strcpy(tempstring, "");
-					  if ((ActuatorMsg2State & 0x80) != 0) //test for actuator 2nd message received
+					  //if ((ActuatorMsg2State & 0x80) != 0) //test for actuator 2nd message received
+					  if ((ActuatorMsg2State2 & CanMsg2Received) == CanMsg2Received)
 					  {
 						  //actuator 2nd message has been received
 						  strcpy(tempstring, "");
-						  if ((ActuatorMsg2State & 0x01) != 0)
+						  //if ((ActuatorMsg2State & 0x01) != 0) //test for signal change
+						  if ((ActuatorMsg2State2 & Sig1ChangedValue) == Sig1ChangedValue)
 						  {
 
 							  sprintf(tmpstr, "\e[3;60H\e[K\e[1;36;40mMotor temp:%3ddegC\e[0m", ActuatorMotorTemp);
 							  strcat(tempstring, tmpstr);
-							  ActuatorMsg2State = ActuatorMsg2State & 0xFE; //reset control flag
+							  //ActuatorMsg2State = ActuatorMsg2State & 0xFE; //reset control flag
+							  ActuatorMsg2State2 = ActuatorMsg2State2 & ~Sig1ChangedValue;
 						  }
 
-						  if ((ActuatorMsg2State & 0x02) != 0)
+						  //if ((ActuatorMsg2State & 0x02) != 0) //test for signal change
+						  if ((ActuatorMsg2State2 & Sig2ChangedValue) == Sig2ChangedValue)
 						  {
 							  sprintf(tmpstr, "\e[4;60H\e[K\e[1;36;40mPCB temp:%3ddegC\e[0m", ActuatorPcbTemp);
 							  strcat(tempstring, tmpstr);
-							  ActuatorMsg2State = ActuatorMsg2State & 0xFD; //reset control flag
+							  //ActuatorMsg2State = ActuatorMsg2State & 0xFD; //reset control flag
+							  ActuatorMsg2State2 = ActuatorMsg2State2 & ~Sig2ChangedValue;
 						  }
 					  }
 
 					  else
 					  {
-						  if ((ActuatorMsg2State & 0x10) == 0)
+						  //if ((ActuatorMsg2State & 0x10) == 0)
+						  if ((ActuatorMsg2State2 & CanMsg2FlashState) != CanMsg2FlashState)
 						  {
 							  //sprintf(tmpstr, "\e[3;40H\e[K\e[7;37;41m-- NO CAN --\e[0m", ActuatorPcbTemp);
 							  //sprintf(tmpstr, "\e[3;60H\e[K\e[7;31;47m-- NO CAN --\e[0m");
@@ -985,7 +979,8 @@ int main(void)
 							  //sprintf(tmpstr, "\e[4;40H\e[K\e[7;37;41m-- NO CAN --\e[0m");
 							  sprintf(tmpstr, "\e[4;60H\e[K\e[7;37;43m-- NO CAN 2-\e[0m");
 							  strcat(tempstring, tmpstr);
-							  ActuatorMsg2State = ActuatorMsg2State | 0x10; //set flag; update flash state flag
+							  //ActuatorMsg2State = ActuatorMsg2State | 0x10; //set flag; update flash state flag
+							  ActuatorMsg2State2 = ActuatorMsg2State2 | CanMsg2FlashState;
 						  }
 						  else
 						  {
@@ -995,11 +990,13 @@ int main(void)
 							  strcat(tempstring, tmpstr);
 							  sprintf(tmpstr, "\e[4;60H\e[K\e[1;37;41m-- NO CAN 4-\e[0m");
 							  strcat(tempstring, tmpstr);
-							  ActuatorMsg2State = ActuatorMsg2State & 0xEF; //reset flag; update flash state flag
+							  //ActuatorMsg2State = ActuatorMsg2State & 0xEF; //reset flag; update flash state flag
+							  ActuatorMsg2State2 = ActuatorMsg2State2 & ~CanMsg2FlashState;
 						  }
 
 					  }
-					  ActuatorMsg2State = ActuatorMsg2State & 0xBF; //reset control flag
+					  //ActuatorMsg2State = ActuatorMsg2State & 0xBF; //reset control flag
+					  ActuatorMsg2State2 = ActuatorMsg2State2 & ~CanMsg2Update; //reset control flag
 
 					  uint16_t stringlength = strlen(tempstring);
 					  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
@@ -1042,7 +1039,7 @@ int main(void)
 					{
 
 						//if ((ActuatorPositionState & 0x02) == 0) //Test for actuator's 0x254 message received
-						if((ActuatorPositionState2 & PositionMessageReceived) == PositionMessageReceived)
+						if((ActuatorPositionState2 & PositionMessageReceived) != PositionMessageReceived)
 						{
 							//if ((ActuatorPositionState & 0x08) == 0) //test message flash state
 //							 ActuatorPositionState2 = (~PositionMessageReceived
@@ -1056,14 +1053,14 @@ int main(void)
 								//sprintf(tmpstr, "\e[6;12H\e[1;36;40mNO CAN POSITION SIGNAL\e[0m"); //set cyan text + reset attributes
 								sprintf(tmpstr, "\e[6;12H\e[7;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
 								strcpy(tempstring, tmpstr);
-								ActuatorPositionState =  ActuatorPositionState | 0x08; //set message flash state flag
+								//ActuatorPositionState =  ActuatorPositionState | 0x08; //set message flash state flag
 								ActuatorPositionState2 = ActuatorPositionState2 | MessageFlashState;
 							}
 							else
 							{
 								sprintf(tmpstr, "\e[6;12H\e[1;36;40m\e[KNO CAN POSITION SIGNAL\e[0m"); //set reverse video red text + reset attributes
 								strcpy(tempstring, tmpstr);
-								ActuatorPositionState = ActuatorPositionState & 0xF7; //reset message flash state flag
+								//ActuatorPositionState = ActuatorPositionState & 0xF7; //reset message flash state flag
 								ActuatorPositionState2 = ActuatorPositionState2 & ~MessageFlashState;
 							}
 						}
@@ -1078,7 +1075,7 @@ int main(void)
 						UartMsgSent = FLAG_SET;
 
 
-						ActuatorPositionState = ActuatorPositionState & 0xFE; //reset control bit
+						//ActuatorPositionState = ActuatorPositionState & 0xFE; //reset control bit
 						ActuatorPositionState2 = ActuatorPositionState2 & (~PositionUpdateFlag); //reset control bit
 					}
 
@@ -2522,11 +2519,15 @@ int main(void)
 				  }
 			  }
 		  }
+	  }
 
 
-		  if (IoTestStatus == 0x01) //See serial command "IOTx"
+	  if ((IoTestStatus & IoTestEnabled) == IoTestEnabled) //See serial command "IOTx"
+	  {
+		  //if ((mainloopcount & 0x01) != 0)
+		  if((IoTestStatus & IoTestUpdate) == IoTestUpdate)
 		  {
-			  if ((mainloopcount & 0x01) != 0)
+			  if((IoTestStatus & IoTestState) == IoTestState)
 			  {
 				  //exercise digital outputs
 				  HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_SET);
@@ -2538,6 +2539,7 @@ int main(void)
 				  HAL_GPIO_WritePin(GPIOD, LSD_2_Pin, GPIO_PIN_RESET);
 				  HAL_GPIO_WritePin(GPIOD, LSD_3_Pin, GPIO_PIN_SET);
 				  HAL_GPIO_WritePin(GPIOD, LSD_4_Pin, GPIO_PIN_RESET);
+				  IoTestStatus = IoTestStatus & ~IoTestState; //clear flag
 			  }
 
 			  else
@@ -2551,47 +2553,50 @@ int main(void)
 				  HAL_GPIO_WritePin(GPIOD, LSD_2_Pin, GPIO_PIN_SET);
 				  HAL_GPIO_WritePin(GPIOD, LSD_3_Pin, GPIO_PIN_RESET);
 				  HAL_GPIO_WritePin(GPIOD, LSD_4_Pin, GPIO_PIN_SET);
+				  IoTestStatus = IoTestStatus | IoTestState; //set flag
 			  }
+			  IoTestStatus = IoTestStatus & ~IoTestUpdate;
 		  }
+	  }
 
 
-		  if (HAL_GPIO_ReadPin(MODE1_GPIO_Port, MODE1_Pin) != 0) //main loop monitoring of key switch input
+	  if (HAL_GPIO_ReadPin(MODE1_GPIO_Port, MODE1_Pin) != 0) //main loop monitoring of key switch input
+	  {
+		  HAL_GPIO_WritePin(MODE1_LED_GPIO_Port, MODE1_LED_Pin, GPIO_PIN_SET);
+
+		  if (XmodemStatus == 0x03)
 		  {
-			  HAL_GPIO_WritePin(MODE1_LED_GPIO_Port, MODE1_LED_Pin, GPIO_PIN_SET);
+			  XmodemStatus = 4;
+			  //send initiation character for start of X-modem transfer
+			  strcpy(tempstring, "C");
+			  uint16_t stringlength = strlen(tempstring);
+			  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
+			  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
+			  UartMsgSent = FLAG_SET;
 
-			  if (XmodemStatus == 0x03)
-			  {
-				  XmodemStatus = 4;
-				  //send initiation character for start of X-modem transfer
-				  strcpy(tempstring, "C");
-				  uint16_t stringlength = strlen(tempstring);
-				  //HAL_UART_Transmit_IT(&huart1, (uint8_t *) tempstring, stringlength); //FTDI USB interface
-				  HAL_UART_Transmit_IT(&huart3, (uint8_t *) tempstring, stringlength); //RS485 port
-				  UartMsgSent = FLAG_SET;
+			  RxStringLen = 0; //zero contents of receive buffer - this will get updated by mainloop as soon as x-modem data arrives
 
-				  RxStringLen = 0; //zero contents of receive buffer - this will get updated by mainloop as soon as x-modem data arrives
-
-				  //start timeout period
-				  FunctionDelay = 5000; //value decremented by TIM ISR
-			  }
+			  //start timeout period
+			  FunctionDelay = 5000; //value decremented by TIM ISR
 		  }
-		  else
-		  {
-			  HAL_GPIO_WritePin(MODE1_LED_GPIO_Port, MODE1_LED_Pin, GPIO_PIN_RESET);
-		  }
+	  }
+	  else
+	  {
+		  HAL_GPIO_WritePin(MODE1_LED_GPIO_Port, MODE1_LED_Pin, GPIO_PIN_RESET);
+	  }
 
 
-		  if ((mainloopcount & 0x02) != 0)
-		  {
-			  HAL_GPIO_WritePin(GPIOD, SpiReset_Pin, GPIO_PIN_SET);
-
-		  }
-		  else
-		  {
-			  HAL_GPIO_WritePin(GPIOD, SpiReset_Pin, GPIO_PIN_RESET);
-		  }
+	  if ((mainloopcount & 0x02) != 0)
+	  {
+		  HAL_GPIO_WritePin(GPIOD, SpiReset_Pin, GPIO_PIN_SET);
 
 	  }
+	  else
+	  {
+		  HAL_GPIO_WritePin(GPIOD, SpiReset_Pin, GPIO_PIN_RESET);
+	  }
+
+
 
 	  if (UartOutputFlag == FLAG_SET) //flag set periodically by TIM ISR
 	  {
@@ -3059,7 +3064,7 @@ int main(void)
 						  strcat(tempstring, tmpstr);
 
 						  DedicatedShiftControl = DedicatedShiftControl | 0x80;
-						  ActuatorPositionState = 0x01; //initiate displaying of CAN actuator position
+						  //ActuatorPositionState = 0x01; //initiate displaying of CAN actuator position
 						  //ActuatorPositionState2 = PositionMessageReceived | (PositionUpdateFlag | CanPositionRequired);
 						  ActuatorPositionState2 = ActuatorPositionState2 | PositionUpdateFlag;
 
@@ -3156,7 +3161,7 @@ int main(void)
 							  //"AM11": Enable processing of actuator message 1
 							  sprintf(tmpstr, "Enabled"); //move cursor to 3rd line, clear text,
 							  strcat(tempstring, tmpstr);
-							  ActuatorPositionState = ActuatorPositionState | 0x04;
+							  //ActuatorPositionState = ActuatorPositionState | 0x04;
 							  //ActuatorPositionState2 = (~PositionMessageReceived |~PositionUpdateFlag | ~CanPositionRequired | ~ProcessPositionMessage);
 							  ActuatorPositionState2 = ActuatorPositionState2 | ProcessPositionMessage;
 							  PositionSignalTimeoutCount = PositionSignalTimeoutPeriod; //reset timeout period, value decremented by TIM1 ISR
@@ -3167,9 +3172,9 @@ int main(void)
 							  //"AM10": disable processing of actuator message 1
 							  sprintf(tmpstr, "Disabled"); //move cursor to 3rd line, clear text,
 							  strcat(tempstring, tmpstr);
-							  ActuatorPositionState = ActuatorPositionState & 0xFB;
+							  //ActuatorPositionState = ActuatorPositionState & 0xFB;
 							  //ActuatorPositionState2 = (~PositionMessageReceived |~PositionUpdateFlag | ~CanPositionRequired | ~ProcessPositionMessage);
-							  ActuatorPositionState2 = ActuatorPositionState2 & (~ProcessPositionMessage);
+							  ActuatorPositionState2 = ActuatorPositionState2 & ~ProcessPositionMessage;
 							  recognisedstring = FLAG_SET;
 						  }
 					  }
@@ -3186,7 +3191,20 @@ int main(void)
 							  //"AM21": Enable processing of actuator message 2
 							  sprintf(tmpstr, "Enabled"); //move cursor to 3rd line, clear text,
 							  strcat(tempstring, tmpstr);
-							  ActuatorMsg2State = 0x20;
+							  //ActuatorMsg2State = 0x20;
+
+//							  enum ActuatorCanMessage2Processing ActuatorMsg2State2
+//							  enum ActuatorCanMessage2Processing
+//							  {
+//							  	CanMsg2ProcessingEnabled = 0x01, //see serial command "AM2x"
+//							  	CanMsg2Update = 0x02,
+//							  	CanMsg2Received = 0x04,
+//							  	Sig1ChangedValue = 0x08
+//							  	Sig2Changedvalue = 0x10
+//							  	CanMsg2FlashState = 0x20
+//							  };
+							  ActuatorMsg2State2 = ActuatorMsg2State2 | CanMsg2ProcessingEnabled;
+
 							  ActuatorMsg2Timeoutcount = ActuatorMsg2TimeoutPeriod; //enable monitoring of actuator 2nd CAN message
 							  recognisedstring = FLAG_SET;
 						  }
@@ -3195,7 +3213,9 @@ int main(void)
 							  //"AM20": disable processing of actuator message 2
 							  sprintf(tmpstr, "Disabled"); //move cursor to 3rd line, clear text,
 							  strcat(tempstring, tmpstr);
-							  ActuatorMsg2State = 0;
+							  //ActuatorMsg2State = 0;
+							  ActuatorMsg2State2 = ActuatorMsg2State2 & ~CanMsg2ProcessingEnabled;
+
 							  recognisedstring = FLAG_SET;
 						  }
 					  }
@@ -3298,7 +3318,7 @@ int main(void)
 						  sprintf(tmpstr, "\e[0m"); //reset all attributes
 						  strcat(tempstring, tmpstr);
 
-						  IoTestStatus = 0;
+						  IoTestStatus = IoTestStatus & ~IoTestEnabled;
 						  recognisedstring = FLAG_SET;
 
 					  }
@@ -3311,7 +3331,8 @@ int main(void)
 						  sprintf(tmpstr, "\e[0m"); //reset all attributes
 						  strcat(tempstring, tmpstr);
 
-						  IoTestStatus = 0x01;
+						  IoTestStatus = IoTestStatus & ~IoTestUpdate; //clear flag
+						  IoTestStatus = IoTestStatus | IoTestEnabled;
 						  recognisedstring = FLAG_SET;
 
 					  }
@@ -3842,7 +3863,7 @@ int main(void)
 						  strcat(tempstring, tmpstr);
 
 						  DedicatedShiftControl = DedicatedShiftControl | 0x20; //set bit
-						  ActuatorPositionState = ActuatorPositionState | 0x01; //update display with status
+						  //ActuatorPositionState = ActuatorPositionState | 0x01; //update display with status
 
 						  ActuatorPositionState2 = ActuatorPositionState2 | (PositionUpdateFlag | CanPositionRequired);
 
@@ -4426,6 +4447,39 @@ int main(void)
 
 			  if (commandlength == 8) //8 character command strings
 			  {
+				  comp = strncmp(RxString, "CRTO", 4); //CRTOxxxx: CAN Receive timeout period
+				  if (comp == 0)
+				  {
+						sprintf(tmpstr, "\e[3;1H\e[K"); //move cursor to 3rd line, clear text,
+						strcpy(tempstring, tmpstr);
+						strcat(tempstring, "CAN receive timeout period: ");
+
+
+						//char valstring[10] = "";
+						//strncpy(valstring, RxString[4], 2); //obtain value characters
+
+						//set I2C device address
+						UserVal = ExtractValueFromString(RxString, 4, 4);
+						if ((UserVal & 0x80000000) == 0)
+						{
+							PositionSignalTimeoutPeriod = UserVal & 0xFFFF;
+
+							sprintf(tmpstr, "%d", PositionSignalTimeoutPeriod);
+							strcat(tempstring, tmpstr);
+						}
+						else
+						{
+							sprintf(tmpstr, "CAN Receive timeout period value error!");
+							strcat(tempstring, tmpstr);
+						}
+
+
+						sprintf(tmpstr, "\e[0m"); //reset all attributes
+						strcat(tempstring, tmpstr);
+						recognisedstring = FLAG_SET;
+				  }
+
+
 				  comp = strncmp(RxString, "I2CA", 4); //I2CAxxxx
 				  if (comp == 0)
 				  {
@@ -4759,23 +4813,39 @@ int main(void)
 			  //ActuatorPositionState2 = PositionMessageReceived | (PositionUpdateFlag | CanPositionRequired);
 			  if ((ActuatorPositionState2 & CanPositionRequired) == CanPositionRequired)
 			  {
-				  ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop code
+				  //ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop code
 				  ActuatorPositionState2 = ActuatorPositionState2 | PositionUpdateFlag;
 			  }
 
-			  if ((ActuatorMsg2State & 0x20) != 0) //test flag set by serial command "AM21"
+			  //if ((ActuatorMsg2State & 0x20) != 0) //test flag set by serial command "AM21"
+			  if ((ActuatorMsg2State2 & CanMsg2ProcessingEnabled) == CanMsg2ProcessingEnabled)
 			  {
 				  //prepare to update screen with actuator message 2 data
-				  ActuatorMsg2State = ActuatorMsg2State | 0x01;
-				  ActuatorMsg2State = ActuatorMsg2State | 0x02;
-				  ActuatorMsg2State = ActuatorMsg2State | 0x40; //flag to main loop to update display
+				  //ActuatorMsg2State = ActuatorMsg2State | 0x01;
+				  //ActuatorMsg2State = ActuatorMsg2State | 0x02;
+				  //ActuatorMsg2State = ActuatorMsg2State | 0x40; //flag to main loop to update display
+
+				  //							  enum ActuatorCanMessage2Processing ActuatorMsg2State2
+				  //							  enum ActuatorCanMessage2Processing
+				  //							  {
+				  //							  	CanMsg2ProcessingEnabled = 0x01, //see serial command "AM2x"
+				  //							  	CanMsg2Update = 0x02,
+				  //							  	CanMsg2Received = 0x04,
+				  //							  	Sig1ChangedValue = 0x08
+				  //							  	Sig2Changedvalue = 0x10
+				  //							  	CanMsg2FlashState = 0x20
+				  //							  };
+
+				  ActuatorMsg2State2 = ActuatorMsg2State2 | Sig1ChangedValue;
+				  ActuatorMsg2State2 = ActuatorMsg2State2 | Sig2ChangedValue;
+				  ActuatorMsg2State2 = ActuatorMsg2State2 | CanMsg2Update;
 			  }
 
 			  //if ((ActuatorPositionState & 0x04) != 0) //test flag set by serial command "AM11"
 			  //ActuatorPositionState2 = (~PositionMessageReceived |~PositionUpdateFlag | ~CanPositionRequired | ~ProcessPositionMessage);
 			  if((ActuatorPositionState2 & ProcessPositionMessage) == ProcessPositionMessage)
 			  {
-				  ActuatorPositionState = ActuatorPositionState | 0x01; //force update of CAN position display
+				  //ActuatorPositionState = ActuatorPositionState | 0x01; //force update of CAN position display
 
 				  //ActuatorPositionState2 = PositionMessageReceived | (PositionUpdateFlag | CanPositionRequired);
 				  ActuatorPositionState2 = ActuatorPositionState2 | PositionUpdateFlag;
@@ -5541,7 +5611,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			ActuatorMsg1FlashCount--;
 			if (ActuatorMsg1FlashCount == 0)
 			{
-				ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop  to update display
+				//ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop  to update display
 
 				//ActuatorPositionState2 = PositionMessageReceived | (PositionUpdateFlag | CanPositionRequired);
 				ActuatorPositionState2 = ActuatorPositionState2 | PositionUpdateFlag;
@@ -5555,7 +5625,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			ActuatorMsg2FlashCount--;
 			if (ActuatorMsg2FlashCount == 0)
 			{
-				ActuatorMsg2State = ActuatorMsg2State | 0x40; //update display
+				//ActuatorMsg2State = ActuatorMsg2State | 0x40; //update display
+				ActuatorMsg2State2 = ActuatorMsg2State2 | CanMsg2Update;
+
 				ActuatorMsg2FlashCount = ActuatorMsg2FlashTime; //reset flash period
 			}
 		}
@@ -5566,8 +5638,23 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			ActuatorMsg2Timeoutcount--;
 			if (ActuatorMsg2Timeoutcount == 0)
 			{
-				ActuatorMsg2State = ActuatorMsg2State & 0x7F; //reset flag - signal to main loop that actuator 2nd message hasn't been received recently
-				ActuatorMsg2State = ActuatorMsg2State | 0x40; //indicate to main loop that message status has changed
+				//ActuatorMsg2State = ActuatorMsg2State & 0x7F; //reset flag - signal to main loop that actuator 2nd message hasn't been received recently
+				//ActuatorMsg2State = ActuatorMsg2State | 0x40; //indicate to main loop that message status has changed
+
+				//							  enum ActuatorCanMessage2Processing ActuatorMsg2State2
+								  //							  enum ActuatorCanMessage2Processing
+								  //							  {
+								  //							  	CanMsg2ProcessingEnabled = 0x01, //see serial command "AM2x"
+								  //							  	CanMsg2Update = 0x02,
+								  //							  	CanMsg2Received = 0x04,
+								  //							  	Sig1ChangedValue = 0x08
+								  //							  	Sig2Changedvalue = 0x10
+								  //							  	CanMsg2FlashState = 0x20
+								  //							  };
+
+				ActuatorMsg2State2 = ActuatorMsg2State2 & ~CanMsg2Received; //reset flag - signal to main loop that actuator 2nd message hasn't been received recently
+				ActuatorMsg2State2 = ActuatorMsg2State2 | CanMsg2Update; //indicate to main loop that message status has changed
+
 				ActuatorMsg2FlashCount = ActuatorMsg2FlashTime; //value decremented by TIM1 ISR
 			}
 		}
@@ -5579,8 +5666,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			PositionSignalTimeoutCount--;
 			if (PositionSignalTimeoutCount == 0)
 			{
-				ActuatorPositionState = ActuatorPositionState & 0xFD; //reset status flag
-				ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop to update display
+				//ActuatorPositionState = ActuatorPositionState & 0xFD; //reset status flag
+				//ActuatorPositionState = ActuatorPositionState | 0x01; //flag to main loop to update display
 
 				//ActuatorPositionState2 = PositionMessageReceived | (PositionUpdateFlag | CanPositionRequired);
 				ActuatorPositionState2 = ActuatorPositionState2 | PositionUpdateFlag; //flag to main loop to update display
@@ -5594,135 +5681,169 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		if ((DedicatedShiftControl & 0x80) != 0)	//see serial command "SCx"
 		{
 			uint8_t Errval = 0;
-			//if (ShiftDemandState == 0x01) //see serial commands "LUP","LDN","CUP", "CDN", "MLUP", "MLDN"
-			if ((ShiftDemand2 & ShiftDemandActive) == ShiftDemandActive)
+			if (ShiftDemandState == 1) //see serial commands "LUP","LDN","CUP", "CDN", "MLUP", "MLDN"
+			//if ((ShiftDemand2 & ShiftDemandActive) == ShiftDemandActive)
 			{
 
 				//test for repeated up-shifts
-				uint8_t InitiateShiftDemand = 0;
-				//if ((ActuatorPositionState & 0x02) != 0) //only enable shift demand if position feedback has been received
-				//ActuatorPositionState2 = PositionMessageReceived | (PositionUpdateFlag | CanPositionRequired);
-				if((ActuatorPositionState2 & PositionMessageReceived) == PositionMessageReceived)
-				{
-					//if ((ShiftDemand & 0xA0) != 0) //bits set by serial commands LUP,CUP, MLUP, MCUP,
-					if ((((ShiftDemand2 & LogicLevelUpShift)) == LogicLevelUpShift) | (((ShiftDemand2 & LogicLevelUpShift)) == LogicLevelUpShift))
-					{
-						if (ActuatorPosition < PositionMaxLimit)
-						{
-							InitiateShiftDemand = 1;
-						}
-						else
-						{
-							if(ShiftDemandCycleState == ShiftDemandCycle_Enabled) //seee serial command "SCYCx"
-							{
-								//position has reached maximum , prepare to run in oppsite direction
-								//determine type of shift demand
-								//if (ShiftDemand == 0x10)
-								if ((ShiftDemand2 & LogicLevelUpShift) == LogicLevelUpShift)
-								{
-									//logic level upshift
-									ShiftDemand = 0x20;
-									ShiftDemand2 = ShiftDemand2 & (~LogicLevelUpShift | ~CanUpShift | ~CanDownShift);
-									ShiftDemand2 = ShiftDemand2 | LogicLevelDownShift;
-									InitiateShiftDemand = 1;
-								}
-							}
-							else
-							{
-								Shiftdemandfeedback = Shiftdemandfeedback & 0xF0;
-								Shiftdemandfeedback = Shiftdemandfeedback | 0x01; 	//error 1
-								//Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
-							}
-						}
-
-					}
-					//if ((ShiftDemand & 0x50) != 0) //bits set by serial commands "LDN", "CDN", "MLDN", "MCDN",
-					if (((ShiftDemand2 & LogicLevelDownShift) == LogicLevelDownShift) | ((ShiftDemand2 & LogicLevelUpShift) == LogicLevelUpShift))
-					{
-						if (ActuatorPosition > PositionMinLimit)
-						{
-							InitiateShiftDemand = 1;
-						}
-
-						else
-						{
-							if(ShiftDemandCycleState == ShiftDemandCycle_Enabled) //see serial command "SCYCx"
-							{
-								//position has reached maximum , prepare to run in oppsite direction
-								//determine type of shift demand
-								//if (ShiftDemand == 0x20)
-								if ((ShiftDemand2 & LogicLevelDownShift) == LogicLevelDownShift)
-								{
-									//logic level downshift
-									ShiftDemand = 0x10;
-									InitiateShiftDemand = 1;
-									ShiftDemand2 = ShiftDemand2 & (~LogicLevelDownShift | ~CanUpShift | ~CanDownShift);
-									ShiftDemand2 = ShiftDemand2 | LogicLevelUpShift;
-
-									ShiftDemandCycleCount++;
-									if (ShiftDemandCycleCountMax != 0)
-									{
-										if (ShiftDemandCycleCount > ShiftDemandCycleCountMax)
-										{
-											ShiftDemandCycleState = ShiftDemandCycle_Disabled;
-
-											//indicate to main loop that shift demand cycling has been completed
-											Shiftdemandfeedback = Shiftdemandfeedback & 0xF0; //error 0
-											Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
-										}
-									}
-								}
-							}
-							else
-							{
-								Shiftdemandfeedback = Shiftdemandfeedback & 0xF0;
-								Shiftdemandfeedback = Shiftdemandfeedback | 0x02; 	//error 2
-								//Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
-							}
-						}
-					}
-				}
-
+				//uint8_t InitiateShiftDemand = 0;
 
 				//if ((DedicatedShiftControl & 0x20) == 0) //see serial command "RPC0"
 				//ActuatorPositionState2 = PositionMessageReceived | (PositionUpdateFlag | CanPositionRequired);
-				if ((ActuatorPositionState2 & CanPositionRequired) == CanPositionRequired)
+				if ((ActuatorPositionState2 & CanPositionRequired) == CanPositionRequired) //see serial command "RPC0"
 				{
-					InitiateShiftDemand = 1;
-				}
+					//CAN position feedback has been specified.
 
-				if (InitiateShiftDemand == 1)
-				{
-					ShiftDemandPulseCount = ShiftDemandPulseTime;
-					PreloadPullActivationCount = PreloadPullActivationTime + 1; //add offset to ensure each sequence step is executed
-
-					if (Multishift != 0) //see serial commands "MLUP","MLDN"
+					//if ((ActuatorPositionState & 0x02) != 0) //only enable shift demand if position feedback has been received
+					//ActuatorPositionState2 = PositionMessageReceived | (PositionUpdateFlag | CanPositionRequired);
+					if((ActuatorPositionState2 & PositionMessageReceived) == PositionMessageReceived)
 					{
-						Shift2ShiftCount = Shift2ShiftTime; //set time to next shift demand (multiple shift requested!)
+						//if ((ShiftDemand & 0xA0) != 0) //bits set by serial commands LUP,CUP, MLUP, MCUP,
+						if ((((ShiftDemand2 & LogicLevelUpShift)) == LogicLevelUpShift) | (((ShiftDemand2 & LogicLevelUpShift)) == LogicLevelUpShift))
+						{
+							if (ActuatorPosition < PositionMaxLimit)
+							{
+								//InitiateShiftDemand = 1;
+								ShiftDemandState = 2; //advance state count
+							}
+							else
+							{
+								if(ShiftDemandCycleState == ShiftDemandCycle_Enabled) //seee serial command "SCYCx"
+								{
+									//position has reached maximum , prepare to run in oppsite direction
+									//determine type of shift demand
+									//if (ShiftDemand == 0x10)
+									if ((ShiftDemand2 & LogicLevelUpShift) == LogicLevelUpShift)
+									{
+										//logic level upshift
+										ShiftDemand = 0x20;
+										ShiftDemand2 = ShiftDemand2 & (~LogicLevelUpShift | ~CanUpShift | ~CanDownShift);
+										ShiftDemand2 = ShiftDemand2 | LogicLevelDownShift;
+										//InitiateShiftDemand = 1;
+										ShiftDemandState = 2; //advance state count
+									}
+								}
+								else
+								{
+									Shiftdemandfeedback = Shiftdemandfeedback & 0xF0;
+									Shiftdemandfeedback = Shiftdemandfeedback | 0x01; 	//error 1
+									Shiftdemandfeedback = Shiftdemandfeedback | 0x80; //indicate to main loop that feedback value has changed
+
+									ShiftDemand = 0;
+									ShiftDemand2 = ShiftDemand2 & ~(LogicLevelUpShift | LogicLevelDownShift | CanUpShift | CanDownShift | ShiftDemandActive);
+
+									ShiftDemandState = 0;
+									Multishift  = 0;
+								}
+							}
+
+						}
+						//if ((ShiftDemand & 0x50) != 0) //bits set by serial commands "LDN", "CDN", "MLDN", "MCDN",
+						if (((ShiftDemand2 & LogicLevelDownShift) == LogicLevelDownShift) | ((ShiftDemand2 & LogicLevelUpShift) == LogicLevelUpShift))
+						{
+							if (ActuatorPosition > PositionMinLimit)
+							{
+								//InitiateShiftDemand = 1;
+								ShiftDemandState = 2; //advance state count
+							}
+
+							else
+							{
+								if(ShiftDemandCycleState == ShiftDemandCycle_Enabled) //see serial command "SCYCx"
+								{
+									//position has reached maximum , prepare to run in oppsite direction
+									//determine type of shift demand
+									//if (ShiftDemand == 0x20)
+									if ((ShiftDemand2 & LogicLevelDownShift) == LogicLevelDownShift)
+									{
+										//logic level downshift
+										ShiftDemand = 0x10;
+										//InitiateShiftDemand = 1;
+										ShiftDemandState = 2; //advance state count
+
+										ShiftDemand2 = ShiftDemand2 & (~LogicLevelDownShift | ~CanUpShift | ~CanDownShift);
+										ShiftDemand2 = ShiftDemand2 | LogicLevelUpShift;
+
+										ShiftDemandCycleCount++;
+										if (ShiftDemandCycleCountMax != 0)
+										{
+											if (ShiftDemandCycleCount > ShiftDemandCycleCountMax)
+											{
+												ShiftDemandCycleState = ShiftDemandCycle_Disabled;
+
+												//indicate to main loop that shift demand cycling has been completed
+												Shiftdemandfeedback = Shiftdemandfeedback & 0xF0; //error 0
+												Shiftdemandfeedback = Shiftdemandfeedback | 0x80;
+
+												ShiftDemand = 0;
+												ShiftDemand2 = ShiftDemand2 & ~(LogicLevelUpShift | LogicLevelDownShift | CanUpShift | CanDownShift | ShiftDemandActive);
+
+												ShiftDemandState = 0;
+												Multishift  = 0;
+											}
+										}
+									}
+								}
+								else
+								{
+									Shiftdemandfeedback = Shiftdemandfeedback & 0xF0;
+									Shiftdemandfeedback = Shiftdemandfeedback | 0x02; 	//error 2
+									Shiftdemandfeedback = Shiftdemandfeedback | 0x80; //indicate to main loop that feedback value has changed
+
+									ShiftDemand = 0;
+									ShiftDemand2 = ShiftDemand2 & ~(LogicLevelUpShift | LogicLevelDownShift | CanUpShift | CanDownShift | ShiftDemandActive);
+
+									ShiftDemandState = 0;
+									Multishift  = 0;
+								}
+							}
+						}
 					}
-
-
+				}
+				else
+				//if ((DedicatedShiftControl & 0x20) == 0) //see serial command "RPC0"
+				//ActuatorPositionState2 = PositionMessageReceived | (PositionUpdateFlag | CanPositionRequired);
+				//if ((ActuatorPositionState2 & CanPositionRequired) == CanPositionRequired) //see serial command "RPC0"
+				{
+					//InitiateShiftDemand = 1;
 					ShiftDemandState = 2; //advance state count
 				}
 
-				else
-				{
-					ShiftDemand = 0;
-					ShiftDemand2 = ShiftDemand2 & (~LogicLevelUpShift | ~LogicLevelDownShift | ~CanUpShift | ~CanDownShift | ~ShiftDemandActive);
-
-					ShiftDemandState = 0;
-					Multishift  = 0;
-
-					if ((Shiftdemandfeedback & 0x0F) == 0)
-					{
-						//Shiftdemandfeedback = Shiftdemandfeedback & 0xF0;
-						Shiftdemandfeedback = Shiftdemandfeedback | 0x03; 	//error 3
-
-					}
-					Shiftdemandfeedback = Shiftdemandfeedback | 0x80; //indicate to main loop that feedback value has changed
-
-				}
 			}
+
+			//if (InitiateShiftDemand == 1)
+			if (ShiftDemandState == 2)
+			{
+				ShiftDemandPulseCount = ShiftDemandPulseTime;
+				PreloadPullActivationCount = PreloadPullActivationTime + 1; //add offset to ensure each sequence step is executed
+
+				if (Multishift != 0) //see serial commands "MLUP","MLDN"
+				{
+					Shift2ShiftCount = Shift2ShiftTime; //set time to next shift demand (multiple shift requested!)
+				}
+
+				//ShiftDemandState = 2; //advance state count
+				ShiftDemandState = 3; //advance state count
+			}
+
+//				else
+//				{
+//					ShiftDemand = 0;
+//					ShiftDemand2 = ShiftDemand2 & ~(LogicLevelUpShift | LogicLevelDownShift | CanUpShift | CanDownShift | ShiftDemandActive);
+//
+//					ShiftDemandState = 0;
+//					Multishift  = 0;
+//
+//					if ((Shiftdemandfeedback & 0x0F) == 0)
+//					{
+//						//Shiftdemandfeedback = Shiftdemandfeedback & 0xF0;
+//						Shiftdemandfeedback = Shiftdemandfeedback | 0x03; 	//error 3
+//
+//					}
+//					//Shiftdemandfeedback = Shiftdemandfeedback | 0x80; //indicate to main loop that feedback value has changed
+//
+//				}
+
 
 
 			if (ShiftDemandPulseCount != 0)
@@ -5770,11 +5891,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 					if ((ShiftDemand2 & LogicLevelUpShift) == LogicLevelUpShift)
 					{
 						//apply logic level upshift signal state
-						if (HsOpDriveConfig == Enabled) //see serial commad  "HSxy" (active by default)
+						if (HsOpDriveConfig == Enabled) //see serial commad  "AH1" (active high by default)
 						{
 							HAL_GPIO_WritePin(GPIOD, HSD_1_Pin, GPIO_PIN_SET);
 						}
-						if (LsOpDriveConfig == Enabled)
+						if (LsOpDriveConfig == Enabled) //see serial command "AL1" (active low)
 						{
 							HAL_GPIO_WritePin(GPIOD, LSD_1_Pin, GPIO_PIN_SET);
 						}
@@ -5833,7 +5954,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				if (PreloadPullActivationCount == 0)
 				{
 					//ShiftDemand = ShiftDemand & 0xF0;
-					ShiftDemandState = 3; //advance state count
+					//ShiftDemandState = 3; //advance state count
+					ShiftDemandState = 4; //advance state count
 					PreloadPullDemandCount = PreloadPullDemandPulseTime + 1; //ensure non zero value to ensure each sequence step is executed
 				}
 			}
@@ -5850,7 +5972,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				if (PreloadPullDemandCount == 0)
 				{
 					//ShiftDemand = ShiftDemand & 0xF0;
-					ShiftDemandState = 4; //advance state count
+					//ShiftDemandState = 4; //advance state count
+					ShiftDemandState = 5; //advance state count
 					PreloadPushActivationCount = PreloadPushActivationTime + 1;
 				}
 			}
@@ -5866,7 +5989,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				if (PreloadPushActivationCount == 0)
 				{
 					//ShiftDemand = ShiftDemand & 0xF0;
-					ShiftDemandState = 5; //advance state count
+					//ShiftDemandState = 5; //advance state count
+					ShiftDemandState = 6; //advance state count
 					PreloadPushDemandCount = PreloadPushDemandPulseTime + 1;
 				}
 			}
@@ -5882,7 +6006,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				if (PreloadPushDemandCount == 0)
 				{
 					//ShiftDemand = ShiftDemand & 0xF0;
-					ShiftDemandState = 6; //advance state count
+					//ShiftDemandState = 6; //advance state count
+					ShiftDemandState = 7; //advance state count
 
 				}
 			}
@@ -5891,7 +6016,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				//deactivate preload 'push' signal
 				HAL_GPIO_WritePin(GPIOD, HSD_4_Pin, GPIO_PIN_RESET);
 
-				if (ShiftDemandState == 6)
+				//if (ShiftDemandState == 6)
+				if (ShiftDemandState == 7)
 				{
 					//shift demand completed
 					if (Multishift != 0)
@@ -6044,6 +6170,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			{
 				UartUpdateCount = UARTUPDATEPERIOD;
 				UartOutputFlag = FLAG_SET;
+
+				IoTestStatus = IoTestStatus | IoTestUpdate;
+
 			}
 		}
 
@@ -6132,16 +6261,18 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 
 				//if ((ActuatorPositionState & 0x02) == 0)  //only enable shift demand if position feedback has been received
 				//ActuatorPositionState2 = PositionMessageReceived | (PositionUpdateFlag | CanPositionRequired);
-				if((ActuatorPositionState2 & PositionMessageReceived) == PositionMessageReceived)
+				if((ActuatorPositionState2 & PositionMessageReceived) != PositionMessageReceived)
 				{
-					ActuatorPositionState = ActuatorPositionState | 0x02; 	//record that an actuator message has been received, this will be cleared if timeout period expires
-					ActuatorPositionState = ActuatorPositionState | 0x01; 	//flag to main loop to update displayed position
+					//ActuatorPositionState = ActuatorPositionState | 0x02; 	//record that an actuator message has been received, this will be cleared if timeout period expires
+					//ActuatorPositionState = ActuatorPositionState | 0x01; 	//flag to main loop to update displayed position
 
 					//ActuatorPositionState2 = PositionMessageReceived | (PositionUpdateFlag | CanPositionRequired);
 					ActuatorPositionState2 = ActuatorPositionState2 | PositionMessageReceived; //record that an actuator message has been received, this will be cleared if timeout period expires
 					ActuatorPositionState2 = ActuatorPositionState2 | PositionUpdateFlag; //flag to main loop to update displayed position
 
-					ActuatorPositionState = ActuatorPositionState & 0xF7; 	//reset flash state flag
+					//ActuatorPositionState = ActuatorPositionState & 0xF7; 	//reset flash state flag
+					ActuatorPositionState2 = ActuatorPositionState2 & ~CanMsg2FlashState; //reset flash state flag
+
 					ActuatorMsg1FlashCount = 0;								//prevent message flashing
 				}
 
@@ -6150,7 +6281,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 				{
 					PrevActuatorPosition = ActuatorPosition;
 
-					ActuatorPositionState = ActuatorPositionState | 0x01; 	//flag to main loop to update displayed position
+					//ActuatorPositionState = ActuatorPositionState | 0x01; 	//flag to main loop to update displayed position
 
 					ActuatorPositionState2 = ActuatorPositionState2 | PositionUpdateFlag; //flag to main loop to update displayed position
 				}
@@ -6161,30 +6292,55 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 				//obtain actuator temperatures
 				ActuatorMotorTemp = CanRxData[0];
 				ActuatorPcbTemp = CanRxData[1];
-				if ((ActuatorMsg2State & 0x80) == 0)
+				//if ((ActuatorMsg2State & 0x80) == 0)
+				if ((ActuatorMsg2State2 & CanMsg2ProcessingEnabled) != CanMsg2ProcessingEnabled)
 				{
-					ActuatorMsg2State = ActuatorMsg2State | 0x80; 	//indicate to main loop that the 2nd actuator message has been received, this will be cleared if timeout period expires
-					ActuatorMsg2State = ActuatorMsg2State | 0x01;	//flag to main loop that value has changed - force update
-					ActuatorMsg2State = ActuatorMsg2State | 0x02;	//flag to main loop that value has changed - force update
-					ActuatorMsg2State = ActuatorMsg2State | 0x40; 	//prepare to update display
+					//CAN message 2 processing has just been enabled
+//					ActuatorMsg2State = ActuatorMsg2State | 0x80; 	//indicate to main loop that the 2nd actuator message has been received, this will be cleared if timeout period expires
+//					ActuatorMsg2State = ActuatorMsg2State | 0x01;	//flag to main loop that value has changed - force update
+//					ActuatorMsg2State = ActuatorMsg2State | 0x02;	//flag to main loop that value has changed - force update
+//					ActuatorMsg2State = ActuatorMsg2State | 0x40; 	//prepare to update display
+//
+//					ActuatorMsg2State = ActuatorMsg2State & 0xEF;	//reset flash state flag
 
-					ActuatorMsg2State = ActuatorMsg2State & 0xEF;	//reset flash state flag
+					//enum ActuatorCanMessage2Processing ActuatorMsg2State2 = 0;
+					//enum ActuatorCanMessage2Processing
+					//{
+					//	CanMsg2ProcessingEnabled = 0x01,
+					//	CanMsg2Update = 0x02,
+					//	CanMsg2Received = 0x04
+					//	Sig1ChangedValue = 0x08
+					//	Sig2Changedvalue = 0x10
+					//	CanMsg2FlashState = 0x20
+					//};
+					ActuatorMsg2State2 = ActuatorMsg2State2 | CanMsg2Received; //indicate to main loop that the 2nd actuator message has been received, this will be cleared if timeout period expires
+					ActuatorMsg2State2 = ActuatorMsg2State2 | Sig1ChangedValue;
+					ActuatorMsg2State2 = ActuatorMsg2State2 | Sig2ChangedValue;
+					ActuatorMsg2State2 = ActuatorMsg2State2 | CanMsg2Update;
+					ActuatorMsg2State2 = ActuatorMsg2State2 & ~CanMsg2FlashState; //reset flash state flag
+
 					ActuatorMsg2FlashCount = 0;						//prevent message flashing
 				}
 
 				ActuatorMsg2Timeoutcount = ActuatorMsg2TimeoutPeriod; //reset message timeout period, value decremented by TIM 1 ISR
-				if (ActuatorMotorTemp != PrevActuatorMotorTemp)
+				if (ActuatorMotorTemp != PrevActuatorMotorTemp) //test for signal 1 change
 				{
 					PrevActuatorMotorTemp = ActuatorMotorTemp;
-					ActuatorMsg2State = ActuatorMsg2State | 0x01;	//flag to main loop that value has changed
-					ActuatorMsg2State = ActuatorMsg2State | 0x40; 	//prepare to update display
+					//ActuatorMsg2State = ActuatorMsg2State | 0x01;	//flag to main loop that value has changed
+					//ActuatorMsg2State = ActuatorMsg2State | 0x40; 	//prepare to update display
+
+					ActuatorMsg2State2 = ActuatorMsg2State2 | Sig1ChangedValue;
+					ActuatorMsg2State2 = ActuatorMsg2State2 | CanMsg2Update;
 				}
 
-				if (ActuatorPcbTemp != PrevActuatorPcbTemp)
+				if (ActuatorPcbTemp != PrevActuatorPcbTemp) //test for signal 2 change
 				{
 					PrevActuatorPcbTemp = ActuatorPcbTemp;
-					ActuatorMsg2State = ActuatorMsg2State | 0x02;	//flag to main loop that value has changed
-					ActuatorMsg2State = ActuatorMsg2State | 0x40; 	//prepare to update display
+					//ActuatorMsg2State = ActuatorMsg2State | 0x02;	//flag to main loop that value has changed
+					//ActuatorMsg2State = ActuatorMsg2State | 0x40; 	//prepare to update display
+
+					ActuatorMsg2State2 = ActuatorMsg2State2 | Sig2ChangedValue;
+					ActuatorMsg2State2 = ActuatorMsg2State2 | CanMsg2Update;
 				}
 			}
 			reccount++;

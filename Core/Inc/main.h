@@ -123,6 +123,59 @@ enum Sequencerstate
 //	Enabled = 1
 //} OpDriveConfig;
 
+//enum OpDriveConfig{Disabled, Highside, Lowside, HiAndLoside};
+//typedef enum{Disabled, Highside, Lowside, HiAndLoside}OpDriveConfig;
+typedef enum
+{
+	Disabled = 0,
+	Enabled = 1
+} OpDriveConfig;
+
+
+enum ShiftDemandCycle
+{
+	ShiftDemandCycle_Disabled = 0,
+	ShiftDemandCycle_Enabled = 1
+};
+
+enum ShiftDemandConfig
+{
+	LogicLevelUpShift = 0x80,
+	LogicLevelDownShift = 0x40,
+	CanUpShift = 0x20,
+	CanDownShift = 0x10,
+	CanShiftDemandsEnabled = 0x02, //see serial command "SCCx"
+	ShiftDemandActive = 0x01
+};
+
+
+enum ActuatorPositionConfig
+{
+	PositionMessageReceived = 0x01,
+	PositionUpdateFlag = 0x02,
+	CanPositionRequired = 0x04,
+	ProcessPositionMessage = 0x08, //see serial command "AM1x"
+	MessageFlashState = 0x10
+
+};
+
+enum ActuatorCanMessage2Processing
+{
+	CanMsg2ProcessingEnabled = 0x01, //see serial command "AM2x"
+	CanMsg2Update = 0x02,
+	CanMsg2Received = 0x04,
+	Sig1ChangedValue = 0x08,
+	Sig2ChangedValue = 0x10,
+	CanMsg2FlashState = 0x20
+};
+
+enum IoTestConfigFlags
+{
+	IoTestEnabled = 0x01,
+	IoTestState = 0x02,
+	IoTestUpdate = 0x04
+};
+
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
